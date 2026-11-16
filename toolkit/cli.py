@@ -4,17 +4,18 @@ import sys
 from .config import ConfigurationError, DeploymentRequest, ExitCode, Settings
 from .docker import InspectionError
 from .preflight import inspect_preflight, inspect_status
+from .state import StateUncertain, read_state
 
 
 def build_parser():
     parser = argparse.ArgumentParser(
         prog="python -m toolkit",
-        description="Catalogue deployment toolkit. Batch B adds read-only Docker inspection.",
+        description="Catalogue deployment toolkit. Inspect Docker and local operation records.",
         allow_abbrev=False,
     )
     commands = parser.add_subparsers(dest="command", required=True)
     commands.add_parser(
-        "status", help="Inspect project container states; does not verify application health.",
+        "status", help="Inspect local operation records and observe project containers.",
         allow_abbrev=False,
     )
     for command, description in (
@@ -36,17 +37,36 @@ def main(argv=None):
     parser = build_parser()
     args = parser.parse_args(argv)
     if args.command == "status":
+        state_code = ExitCode.OK
+        try:
+            state = read_state()
+        except StateUncertain as error:
+            print(f"STATE UNCERTAIN: {error}", file=sys.stderr)
+            state_code = ExitCode.STATE_UNCERTAIN
+        else:
+            latest = state["latest"]
+            if latest is None:
+                print("OPERATION STATE: no recorded operations.")
+            else:
+                print(f"LATEST OPERATION: {latest['id']} {latest['status']} "
+                      f"release={latest['release']} image={latest['image_id']}")
+                if latest["status"] == "pending":
+                    print("STATE UNCERTAIN: an unfinished operation requires inspection.", file=sys.stderr)
+                    state_code = ExitCode.STATE_UNCERTAIN
+            success = state["last_success"]
+            if success is not None:
+                print(f"LAST RECORDED SUCCESS: release={success['release']} image={success['image_id']}")
         try:
             rows = inspect_status()
         except (InspectionError, KeyError, TypeError, AttributeError, IndexError):
             print("INSPECTION FAILED: check local Docker access and project metadata; no health conclusion is available.", file=sys.stderr)
-            return ExitCode.PREFLIGHT_REFUSED
+            return state_code or ExitCode.PREFLIGHT_REFUSED
         if not rows:
             print("STATUS: no sdt-demo containers found.")
         for row in rows:
             print(f"{row['service']}: {row['state']} image={row['image_id']}")
-        print("OBSERVATION ONLY: ownership, HTTP behavior and operation state are not verified by status.")
-        return ExitCode.OK
+        print("OBSERVATION ONLY: container states and local records are point-in-time observations.")
+        return state_code
     try:
         settings = Settings(
             verification_timeout=args.verification_timeout,
@@ -59,7 +79,7 @@ def main(argv=None):
         print(f"INVALID INPUT: {error}", file=sys.stderr)
         return ExitCode.INVALID_INPUT
     if args.command == "deploy":
-        print("UNAVAILABLE: deployment is not implemented in Batch B; nothing was changed.", file=sys.stderr)
+        print("UNAVAILABLE: deployment is scheduled for Batch D; nothing was changed.", file=sys.stderr)
         return ExitCode.UNAVAILABLE
     if args.command == "preflight":
         try:

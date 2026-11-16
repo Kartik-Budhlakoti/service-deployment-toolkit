@@ -278,3 +278,59 @@ read-only inspection path for the existing demo, not deployment,
 HTTP behavior, release contents, locking, or operation-state handling.
 Failure scenarios covered by simulated tests have not all been
 reproduced against the live Docker daemon.
+
+## Batch C operation records and locking
+
+The toolkit uses one nonblocking Linux file lock per checkout. Future mutation
+commands must hold it from preflight through final recording. The lock file
+stays in place so cooperating processes always lock the same file. Linux releases
+the lock when the process exits. External Docker commands do not take this lock.
+
+The journal lives under the ignored `.runtime/toolkit/` directory. The current
+`state.json` contains the latest operation and the last recorded success. When a
+new operation begins, the previous completed record is archived as
+`operation-<id>.json`. Files contain the operation ID, image ID, release, outcome
+and UTC timestamps. They exclude Docker output and configuration values. Writes
+sync a temporary file, replace the destination, then sync its directory.
+
+The caller must record `pending` successfully before asking Docker to replace
+anything. Once the result is known, the caller can record `succeeded` or `failed`.
+Only success updates the last successful release. If replacement or verification
+is interrupted and the outcome is uncertain, leave the record pending. A pending
+or invalid snapshot blocks a new operation session. A missing snapshot with
+archives also blocks a new session. Deleting the entire local journal can erase
+that evidence. Reconciliation belongs to Phase 3.
+
+`status` reads the journal without taking the mutation lock and separately
+observes Docker. Pending or invalid state returns 6 and still attempts the
+Docker observation. If Docker inspection also fails, both problems are reported
+and exit 6 takes precedence. A Docker inspection failure alone returns 4.
+Batch D will map lock contention to 5 and recording errors to 7 and connect the
+journal to live deployment. A recording error after replacement may leave
+a pending or just-written record. It must take precedence over success in the
+exit code. An interruption that can be reported exits 130 unless saving a
+required record also failed. A hard process exit can leave a pending record
+without an exit message from the tool.
+
+Batch C uses synthetic operations in temporary directories to exercise real
+cross-process locking, abrupt exit, and failed record replacement. The
+`deploy` command still returns 3. Running `status` is read-only and is expected
+to report no recorded operations on a checkout that has never used the journal.
+
+Run the same unit suite in normal and optimized modes, then run
+`python -m toolkit status` against the existing demo. Record local results once
+observed.
+
+
+### Batch C local verification — passed
+
+All 70 tests passed normally and under Python optimization, with warnings
+treated as errors, on the owner's Python 3.14.10 environment.
+
+The suite exercised cross-process lock contention, abrupt process exit,
+pending-operation refusal, failed record replacement, invalid state,
+and preservation of the last successful release using temporary directories.
+
+Live status reported no recorded operations and observed the api, db,
+and nginx containers running. Live deployment interruption and recovery
+behavior remain pending integration in later work.
