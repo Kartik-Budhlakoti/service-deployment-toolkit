@@ -107,8 +107,12 @@ def check_resources(items, root):
                 "Container belongs to another checkout or Compose file; automatic adoption refused")
         require(item.get("Name") == f"/{PROJECT}-{service}-1", "Unexpected container name")
         state = item["State"]
-        require(state.get("Running") is True and not state.get("Paused") and not state.get("Restarting"),
-                f"{service} must be running before preflight")
+        running = state.get("Status") == "running" and state.get("Running") is True
+        stopped_api = (service == "api" and state.get("Status") == "exited"
+                       and state.get("Running") is False)
+        require((running or stopped_api) and not state.get("Paused")
+                and not state.get("Restarting") and not state.get("Dead"),
+                f"Unsupported container state for {service}")
         if service == "db":
             require(state.get("Health", {}).get("Status") == "healthy", "Database health check is not healthy")
         host = item["HostConfig"]
@@ -169,9 +173,12 @@ def inspect_preflight(request, root=None, docker=None):
         require(network.get("Name") == NETWORK and network.get("Driver") == "bridge"
                 and labels.get(LABEL + "project") == PROJECT and labels.get(LABEL + "network") == "default",
                 "Demo network ownership differs")
-        expected_ids = {item["Id"] for item in selected.values()}
-        require(set(network.get("Containers") or {}) == expected_ids, "Demo network has missing or unexpected attached containers")
+        owned_ids = {item["Id"] for item in selected.values()}
+        required_ids = {item["Id"] for item in selected.values() if item["State"]["Running"]}
+        attached_ids = set(network.get("Containers") or {})
+        require(required_ids <= attached_ids <= owned_ids,
+                "Demo network has missing or unexpected attached containers")
         return {"candidate_image_id": resolved, "current_image_id": selected["api"]["Image"],
-                "expected_release": request.release}
+                "expected_release": request.release, "api_running": selected["api"]["State"]["Running"]}
     except (KeyError, TypeError, AttributeError, IndexError):
         raise InspectionError("Docker/Compose metadata has an unsupported or incomplete structure") from None

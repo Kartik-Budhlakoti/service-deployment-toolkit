@@ -132,9 +132,62 @@ class PreflightTests(unittest.TestCase):
         self.docker.items.pop()
         self.refused()
 
-    def test_stopped_container(self):
+    def test_inconsistent_running_flag_is_refused(self):
         self.docker.items[0]["State"]["Running"] = False
         self.refused()
+
+    def stop_api(self):
+        api = self.docker.items[0]
+        api["State"].update(Status="exited", Running=False)
+        self.docker.network["Containers"].pop(api["Id"])
+
+    def test_stopped_owned_api_without_active_endpoint_passes(self):
+        self.stop_api()
+        self.assertIs(self.run_check()["api_running"], False)
+
+    def test_stopped_owned_api_with_retained_endpoint_passes(self):
+        self.stop_api()
+        self.docker.network["Containers"][self.docker.items[0]["Id"]] = {}
+        self.assertIs(self.run_check()["api_running"], False)
+
+    def test_stopped_dependencies_remain_refused(self):
+        for index in (1, 2):
+            with self.subTest(index=index):
+                original = copy.deepcopy(self.docker.items[index]["State"])
+                self.docker.items[index]["State"].update(Status="exited", Running=False)
+                self.refused()
+                self.docker.items[index]["State"] = original
+
+    def test_stopped_api_foreign_checkout_is_refused(self):
+        self.stop_api()
+        self.docker.items[0]["Config"]["Labels"][LABEL + "project.working_dir"] = "/other"
+        self.refused()
+
+    def test_stopped_api_unexpected_mount_is_refused(self):
+        self.stop_api()
+        self.docker.items[0]["Mounts"] = [{"Destination": "/data"}]
+        self.refused()
+
+    def test_stopped_api_foreign_network_endpoint_is_refused(self):
+        self.stop_api()
+        self.docker.network["Containers"]["f" * 64] = {}
+        self.refused()
+
+    def test_missing_running_dependency_endpoint_is_refused(self):
+        self.stop_api()
+        self.docker.network["Containers"].pop(self.docker.items[1]["Id"])
+        self.refused()
+
+    def test_paused_restarting_dead_and_created_api_refused(self):
+        for state in (
+            {"Status": "paused", "Running": True, "Paused": True},
+            {"Status": "restarting", "Running": True, "Restarting": True},
+            {"Status": "dead", "Running": False, "Dead": True},
+            {"Status": "created", "Running": False},
+        ):
+            with self.subTest(state=state):
+                self.docker.items[0]["State"] = state
+                self.refused()
 
     def test_unhealthy_database(self):
         self.docker.items[1]["State"]["Health"]["Status"] = "unhealthy"

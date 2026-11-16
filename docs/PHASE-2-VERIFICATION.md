@@ -334,3 +334,24 @@ and preservation of the last successful release using temporary directories.
 Live status reported no recorded operations and observed the api, db,
 and nginx containers running. Live deployment interruption and recovery
 behavior remain pending integration in later work.
+
+
+## Stopped-API preflight revision
+
+Preflight now permits an owned API container whose state is exited.
+Database and proxy containers must still be running, and the database
+health check must be healthy. Existing ownership, port, mount and image
+checks remain applicable.
+
+The network check requires all running project-container endpoints.
+It permits the stopped API endpoint to be absent or retained and rejects
+unrelated container endpoints.
+
+Eight regression test methods were added. All 78 tests passed locally
+normally and under optimization, with warnings treated as errors.
+Live preflight also passed against the existing running stack.
+
+Stopped-API acceptance was exercised using test fixtures. A live
+stopped-API exercise and deployment integration remain pending.
+This revision supersedes the earlier blanket running-API prerequisite
+described in the Batch B record.
