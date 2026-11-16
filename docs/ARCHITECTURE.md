@@ -1,66 +1,110 @@
 # Architecture
 
-Status: Phase 0 design baseline. The application and toolkit are not yet
-implemented or verified. This document describes intended behavior.
+Status: Phase 1 demo implemented and checked locally; documentation and PR
+review are in progress. The deployment and recovery toolkit is not implemented.
 
-## Purpose
+## Purpose and scope
 
 Build a Python command-line tool that deploys a specific application image,
 checks essential behavior, and supports recovery to a previous compatible
-application release.
+application release. Its demonstration workload is a minimal read-only
+catalogue backed by PostgreSQL and accessed through NGINX.
 
-The demonstration workload is a minimal read-only catalogue API backed by
-PostgreSQL and accessed through NGINX.
+The baseline targets one Linux host and one dedicated Docker Compose project.
+It requires no paid service, expiring trial, or additional VM. The original diet
+and medical repositories and their Docker resources remain outside its control.
 
-## Scope
+## Implemented demo
 
-- One Linux host and one dedicated Docker Compose project.
-- Python CLI, FastAPI demonstration API, PostgreSQL, and NGINX.
-- Synthetic catalogue data and a fixed database schema.
-- Local execution without required paid services or expiring trials.
-- Terminal summaries and local JSON operation reports.
-- Manual rollback by default.
-- Explicit opt-in automatic recovery for eligible image-only changes.
+| Component | Implementation |
+|---|---|
+| API | FastAPI in a non-root Python container; read-only root filesystem |
+| Database | PostgreSQL 18 with a dedicated named volume |
+| Proxy | NGINX forwarding to the Compose service `api` |
+| Initialization | Explicit one-off `init` service using the API image |
+| Unit tests | Four API failure tests and five smoke-checker regression tests |
+| Live checker | `tests/smoke.py`, run on the host |
 
-The original diet and medical project repositories and their Docker
-resources are outside this project's control.
+The Compose project is `sdt-demo`; its database volume is
+`sdt-demo_catalogue_data`, mounted at `/var/lib/postgresql`.
+NGINX publishes `127.0.0.1:8088`; the API publishes `127.0.0.1:8089` for direct
+checks. PostgreSQL is reachable inside the Compose network, with no host-port
+publication. None of these containers mounts the Docker socket.
 
-## Components
+Requests through NGINX follow this path:
 
-- CLI: validates inputs and coordinates operations.
-- Docker Compose: defines and runs the demonstration stack.
-- API: exposes catalogue, liveness, readiness, and version endpoints.
-- PostgreSQL: stores seeded catalogue records in a dedicated named volume.
-- NGINX: forwards requests to the API.
-- Local state: records release references and operation progress.
-- Reports: record verification and recovery outcomes.
+```mermaid
+flowchart TD
+    Client[Local client] -->|Port 8088| Proxy[NGINX]
+    Proxy -->|api:8000| API[FastAPI]
+    Check[Direct checker] -->|Port 8089| API
+    API -->|Catalogue reads| DB[PostgreSQL]
+    DB --> Volume[Named volume]
+```
 
-The toolkit runs on the host. The demonstration containers do not need
-access to the Docker socket.
+NGINX uses Docker's network DNS resolver for the variable upstream, with a
+five-second validity setting. Replacement checks passed, but a changed upstream
+IP address was not explicitly established by those tests. This is not a
+zero-downtime routing guarantee.
 
-## Proposed API
+## API and database behavior
 
-- GET /items: returns a bounded catalogue in a predictable order.
-- GET /health/live: confirms that the API process can answer.
-- GET /health/ready: checks access to the required database table.
-- GET /version: returns application release metadata.
+| Endpoint | Current behavior |
+|---|---|
+| `GET /items` | Selects `id` and `name`, ordered by ID, limited to 100 rows |
+| `GET /health/live` | Returns liveness without a database request |
+| `GET /health/ready` | Attempts to read the required table; an empty accessible table can pass |
+| `GET /version` | Returns the release string loaded from `app/release.txt` |
 
-Database initialization and repeatable seeding are explicit operator
-actions. Seeding must not duplicate records or erase existing data.
+Database errors caught by the API return HTTP 503 with the generic detail
+`Catalogue unavailable`. Missing configuration and arbitrary programming errors
+are not covered by that database-error handler.
 
-The API has no public write endpoints or individual-user accounts.
-It is an isolated demonstration, not a public multi-user service.
+The API uses `catalogue_reader`. It requests read-only transactions, and the
+initialization code grants SELECT on `public.items`. INSERT, UPDATE, and DELETE
+were independently denied during tests with read-write transactions enabled.
+This does not claim that the role has no other PostgreSQL privileges.
 
-## Deployment verification
+Initialization connects as `catalogue_admin` and creates the fixed table if
+absent. It inserts missing fixture IDs without overwriting existing rows, then
+verifies the expected values. Conflicting fixtures cause failure. The operation
+also configures the reader role's password and grants within the transaction.
+It does not validate every aspect of an arbitrary pre-existing schema, migrate
+schemas, or provide credential rotation.
 
-Preflight checks validate configuration, Docker access, image availability,
+The API has no write endpoints or individual-user accounts. All records are
+synthetic catalogue items; this is not a healthcare application.
+
+## Startup and current verification
+
+Compose waits for PostgreSQL's server health check before starting the API.
+The API container health check uses liveness, not database readiness. NGINX
+waits for API liveness and has no configured container health check of its own.
+Database initialization is an explicit action, not an API-startup side effect.
+
+The smoke checker validates status codes and JSON bodies for all four endpoints
+at both addresses. Normal mode expects exactly the three fixture records;
+`--database-down` expects liveness/version to work and readiness/items to return
+HTTP 503. It uses explicit comparisons, including under Python optimization.
+It has a 12-second per-request socket timeout and a response-size limit, but
+no retries or overall operation deadline. This is a small test helper, not the
+planned deployment verifier.
+
+The image installs 16 pinned runtime packages from `demo/requirements.lock`.
+A separate 19-package development lock includes the test client and its
+additional dependencies. Base-image references are digest-pinned. The working
+application tag `sdt-demo-api:phase1` remains mutable.
+
+## Planned deployment verification
+
+The following describes requirements for Phase 2, not current capabilities.
+
+Preflight checks must validate configuration, Docker access, image availability,
 resource ownership, deployment locking, and recorded operation state before
-replacing the application.
+replacing the application. The selected image must resolve to an immutable
+identifier; a mutable tag alone is insufficient.
 
-The selected image must be resolved to an immutable image identifier.
-A mutable tag alone is insufficient to identify a deployed release.
-
-Five post-deployment check types:
+Five post-deployment check types are planned:
 
 1. Application container state during the verification window.
 2. API liveness.
@@ -68,109 +112,93 @@ Five post-deployment check types:
 4. A database-backed catalogue response with expected synthetic content.
 5. The catalogue response through NGINX.
 
-Checks have explicit deadlines, request timeouts, and bounded retries.
+The verifier must have explicit deadlines, request timeouts, and bounded retries.
+Readiness assists startup and diagnosis; it does not replace catalogue checks.
+Passing the checks establishes only the tested conditions, not complete
+correctness, security, or future availability.
 
-Readiness is an operational endpoint used during startup and diagnosis.
-It does not replace the database-backed catalogue check.
+## Planned recovery policy
 
-Passing these checks establishes only that the defined checks passed.
-It does not prove complete correctness, security, or future availability.
+Manual rollback is the default. A failed deployment must be reported without
+automatically replacing it again; service may remain unavailable until the
+operator acts.
 
-## Recovery policy
+Automatic recovery requires explicit opt-in, a previous recorded successful
+release whose image remains available, and supported image-only changes under
+unchanged runtime configuration, database schema, and dependency arrangement.
+Eligibility relies on declared compatibility and available checks, not proof of
+arbitrary compatibility. Missing or inconsistent evidence must prevent automatic
+recovery.
 
-Manual rollback is the default. A failed deployment is reported without
-automatically replacing it again. Service may remain unavailable until
-the operator takes action.
+Rollback restores an application image, not data, configuration, or dependency
+availability. Automatic recovery is attempted at most once per failed deployment
+and verified separately. A failed deployment returns a nonzero exit code even
+if recovery succeeds. A failed first deployment has no previous release to restore.
 
-Automatic recovery requires explicit opt-in and a recorded previous
-successful release whose image is still available.
+## Planned state, interruption handling, and reporting
 
-It is limited to supported image-only changes under unchanged runtime
-configuration, database schema, and dependency arrangement.
+Mutating toolkit operations must share a lock. This cannot prevent external
+Docker commands. Operation progress must be recorded before replacement, and
+a failed candidate must not overwrite the previous successful release reference.
 
-Eligibility depends on declared compatibility and the checks the toolkit
-can perform. The toolkit cannot prove arbitrary application compatibility.
-If required evidence is missing or inconsistent, automatic recovery is
-refused.
+Incomplete operations, inconsistent state, or unreadable state require inspection
+before further mutations. Unknown state must not be treated as success. Read-only
+status and diagnosis should remain available. The state format and reconciliation
+procedure must be specified before the dependent implementation is accepted.
 
-Rollback restores an application image, not database contents,
-configuration changes, or dependency availability.
+Each operation must attempt a small local JSON record and print a concise result.
+Deployment and recovery outcomes are separate. Failure evidence must be bounded,
+distinguish observations from suspected causes, and avoid secret values, complete
+environment dumps, and unfiltered logs. Failure to save a report must be disclosed.
 
-Recovery is attempted at most once per failed deployment and is verified
-separately. A failed deployment returns a nonzero exit code even when
-recovery succeeds.
-
-A failed first deployment has no previous release to restore.
-
-## State and interruption handling
-
-Mutating operations share a lock to prevent overlapping toolkit operations.
-The lock cannot prevent someone from changing Docker resources manually.
-
-Operation progress is recorded before replacing the application.
-The previous successful release reference must not be overwritten by a
-failed candidate.
-
-Incomplete operations, inconsistent state, or unreadable state require
-inspection before another mutating operation proceeds. Unknown state must
-not be treated as success.
-
-Read-only status and diagnostic operations should remain available when
-deployment cannot proceed.
-
-The exact state format and reconciliation procedure will be specified
-before recovery implementation.
-
-## Reporting
-
-Each operation attempts to save a small record and prints a concise result.
-
-Deployment outcome and recovery outcome are separate fields.
-Detailed failures include bounded diagnostic evidence and suggested next
-steps. Observations must be distinguished from suspected causes.
-
-Reports must not include secret values, complete environment dumps, or
-unfiltered application logs.
-
-If a report cannot be saved, the command must disclose that failure rather
-than claim that the report exists.
+Current `.runtime` files are local test evidence, not an implemented release-state
+store or tamper-proof audit trail.
 
 ## Resource and security boundaries
 
-- Operate only on the configured local Docker environment.
-- Use a distinct Compose project name and verify resource ownership.
-- Refuse to adopt conflicting pre-existing resources silently.
-- Bind any published demo ports to loopback.
-- Do not publish PostgreSQL to the host.
-- Do not explicitly alter host DNS or firewall configuration.
-- Docker may manage networking rules as part of normal container operation.
-- Do not perform global Docker cleanup.
-- Do not delete database volumes during deployment or rollback.
-- Keep credentials out of Git, image layers, operation state, and reports.
-- Use trusted local configuration and reviewed demonstration images.
+Already configured for the demo:
 
-Docker access grants substantial control over the host. These boundaries
-limit intended toolkit behavior; they do not create a security sandbox.
+- Separate Compose project, network, and named database volume.
+- Loopback-only published ports; no published PostgreSQL port.
+- Non-root API and initializer with read-only root filesystems, dropped
+  capabilities, and `no-new-privileges`.
+- The generated root `.env` is ignored by Git and lies outside the `demo`
+  build context. This does not detect secrets placed in other files or remove
+  a secret that was already tracked.
+
+Required for the future toolkit:
+
+- Operate only on the configured local Docker environment.
+- Verify ownership and refuse silent adoption of conflicting resources.
+- Perform no global cleanup and delete no database volumes during deployment
+  or rollback.
+- Do not explicitly change host DNS or firewall settings. Docker may manage
+  networking rules during normal operation.
+- Keep credentials out of image layers, operation state, and reports.
+
+Docker access grants substantial host control. Trusted local operators,
+configuration, and demonstration images are assumed. Environment-based container
+credentials remain accessible to sufficiently privileged Docker users; these
+boundaries are not a security sandbox.
 
 ## Phases and acceptance
 
 0. Foundation: scope, decisions, limitations, README, and ignore rules.
-1. Demo stack: clean startup, repeatable seeding, catalogue access, and
-   verified health behavior.
-2. Deployment: explicit image selection, locking, operation records,
-   and the five verification checks.
-3. Recovery: manual rollback, eligible automatic recovery, and detection
-   and handling of interrupted operations.
-4. Diagnostics: DNS/TCP/HTTP observations, structured reports, and
-   reproducible failure exercises.
-5. Release: clean-install verification, CI evidence, a demonstration,
-   and documentation matching actual behavior.
+1. Demo stack: startup, repeatable seeding, catalogue access, and health behavior.
+2. Deployment: explicit image selection, locking, operation records, and the
+   five verification check types.
+3. Recovery: manual rollback, eligible automatic recovery, and handling of
+   interrupted operations.
+4. Diagnostics: DNS/TCP/HTTP observations, structured reports, and reproducible
+   failure exercises.
+5. Release: clean-install verification, CI evidence, demonstration, and accurate
+   documentation.
 
-Tests and documentation develop alongside each phase.
+Tests and documentation develop alongside each phase. Local Phase 1 results
+are recorded in [Known issues and limitations](KNOWN-ISSUES.md).
 
 ## Out of scope
 
-Kubernetes, Terraform, Jenkins, AI classification, public hosting,
-application authentication, real health data, database migrations,
-database backup and restore, database rollback, high availability,
-zero-downtime guarantees, and a web dashboard.
+Kubernetes, Terraform, Jenkins, AI classification, public hosting, application
+authentication, real health data, database migrations, database backup and restore,
+database rollback, high availability, zero-downtime guarantees, and a web dashboard.
