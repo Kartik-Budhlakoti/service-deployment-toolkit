@@ -1,6 +1,6 @@
 # Phase 2 contract and verification
 
-## Batch A: command interface
+## Batch A: command interface (historical acceptance record)
 
 Batch A implements argument parsing and input validation only. It does not
 contact Docker, inspect the filesystem for deployment configuration, read .env,
@@ -104,9 +104,177 @@ unavailable commands, subprocess refusal, and the real module entry point from
 an empty directory. Tests do not establish Docker integration or deployment safety.
 
 Local Batch A verification passed on the project owner's Python 3.14.10
-environment. All 25 unit tests passed normally and under optimization, with
-warnings treated as errors. Manual command checks confirmed help output,
-validation exit code 0, and unavailable deployment/status exit code 3.
-These results do not establish Docker integration or deployment behavior.
-
+environment: all 25 tests passed normally and under optimization with warnings
+treated as errors. Manual checks confirmed validation exit 0 and the then
+unimplemented deployment/status commands returning exit 3.
 Append later batch evidence here; do not mark planned checks as completed.
+
+
+## Batch B: read-only inspection
+
+Batch B adds `preflight` and implements container observation through `status`.
+The historical Batch A status exit code above no longer describes this build.
+`validate` still checks inputs only. `deploy` still returns 3 without contacting
+Docker. No deployment, image pull/build, initialization, cleanup, rollback,
+operation-state writing or HTTP check is implemented by Batch B.
+
+| Command | Current behavior |
+|---|---|
+| `python -m toolkit status` | Lists observed project service states and image IDs. Exit 0 means inspection completed, not that the application is healthy. An empty project is explicitly reported. |
+| `python -m toolkit preflight --image sdt-demo-api:phase1 --release demo-v1` | Checks the current demo resources and resolves the local candidate image. Exit 0 means this read-only snapshot passed. |
+| `python -m toolkit deploy --image sdt-demo-api:phase1 --release demo-v1` | Remains unavailable; exit 3. |
+
+Inspection refusal or Docker failure returns 4. Invalid command/input returns 2.
+Status does not require valid Compose configuration, an .env file, or future
+operation state; it can report stopped containers. It performs no ownership or
+HTTP acceptance check. An unknown service/metadata shape causes refusal rather
+than an invented result.
+
+### Scope and checks
+
+The supported endpoint is the user's existing default Docker context at
+`unix:///var/run/docker.sock`, serving Linux containers. Alternate contexts,
+remote endpoints and relevant Docker/Compose environment overrides are refused.
+This deliberately excludes Docker Desktop and rootless socket paths for now.
+Each daemon command explicitly selects the default context. The tool does not
+change the user's selected context.
+
+Preflight requires an already initialized, running demo from this checkout:
+
+- Explicit root compose.yaml, .env, project name and resolved Compose settings.
+- Exactly the supported api, db, nginx and init service definitions.
+- Expected loopback publications, declared mounts, network and named volume.
+- A locally available candidate with a full immutable image ID, matching Linux
+  architecture, and no image-declared volumes. It is not started for inspection.
+- Exactly three project containers: one each for api, db and nginx. Labels must
+  identify this project, this checkout, the original compose.yaml and normal
+  service containers. Leftover initializer containers or duplicates cause refusal.
+- Running containers, an explicitly healthy database, expected actual ports,
+  mounts and network attachments. API health and catalogue behavior are not
+  inferred from these checks.
+- Running database and proxy image IDs matching their configured local images.
+- A local named database volume with expected Compose labels and no other
+  containers referencing it, including stopped containers.
+- A bridge network with expected Compose labels and exactly the three expected
+  container attachments.
+
+Compose labels identify the expected resources but are not cryptographic proof
+of ownership. Docker administrators can alter resources. Trusted local operators,
+configuration and images remain assumptions. These are targeted checks, not a
+complete comparison of every Compose setting or container privilege. Candidate
+entrypoint behavior, credentials, schema compatibility, release contents and
+application correctness are not verified here.
+
+Inspection uses Docker's resolved Compose JSON and inspect metadata internally.
+These can contain credentials; the tool does not print or persist raw results.
+Output is limited to fixed descriptions and selected service/state/image-ID
+fields. Errors withhold raw Docker stderr and command output. No secret scanner
+or arbitrary-log redactor is claimed.
+
+Each Docker subprocess has the configured command timeout (60 seconds for
+status), and a combined stdout/stderr limit of 1 MiB. The limit is enforced while
+reading. The deadline applies to each subprocess, not the whole preflight.
+No retries are implemented in inspection. A changing/disappearing resource may
+cause refusal; the user can inspect and retry.
+
+### Required follow-up before deployment
+
+A successful preflight is a snapshot, not authorization to mutate later using
+stale observations. Batch C supplies the shared mutation lock and state checks;
+Batch D must repeat the applicable checks while holding that lock immediately
+before replacement. External Docker commands can still race with toolkit work.
+
+The first deployment record must not treat the current Phase 1 image as a
+previous toolkit-verified successful release merely because preflight passed.
+A failed first toolkit deployment has no recorded recovery target.
+
+Current checkout-label checks accept only the original compose.yaml. Batch D
+must deliberately extend and test that rule for its generated override so that
+a later deployment accepts toolkit-owned containers without accepting arbitrary
+overrides. Preflight currently requires running services; recovery from a stopped
+API is not implemented by this inspection batch. These are integration tasks,
+not reasons to weaken the ownership checks now.
+
+### Verification and evidence
+
+The suite now contains 55 test methods: the original 25, two additional CLI
+methods, 19 preflight methods and nine Docker runner methods. Some methods
+exercise multiple input cases. The status tests were updated for its implemented
+read-only behavior. This count is coverage bookkeeping, not a reliability score.
+
+The new tests cover missing images, platform mismatch, image volumes, malformed
+metadata, foreign checkout labels, duplicate/missing services, stopped containers,
+unhealthy database, public ports, unexpected mounts, shared resources, dependency
+image drift, missing Docker, command timeout, malformed JSON, bounded output,
+withheld raw errors and local-context restrictions. Docker integration is modeled
+with fixtures. Runner tests execute a temporary fake Docker executable to test
+real subprocess behavior without contacting a daemon.
+
+All 55 tests passed normally and under optimization with warnings treated as
+errors in the assistant's Python 3.12.14 environment. The project owner's Python
+3.14 runs and live Docker inspection remain pending. Passing fixtures does not
+prove that every metadata assumption matches the installed Docker/Compose version.
+
+Run from the project root:
+
+```bash
+PYTHONPATH=demo python -W error -m unittest discover -s tests -v
+PYTHONPATH=demo python -O -W error -m unittest discover -s tests -v
+python -m toolkit status
+python -m toolkit preflight --image sdt-demo-api:phase1 --release demo-v1
+```
+
+A missing-image refusal can be checked without changing containers by selecting a
+syntactically valid but locally absent image reference. Verify absence first;
+never assume a particular tag is absent. No failure exercise needs to stop the
+database or alter existing resources for this batch.
+
+Primary command references checked for this implementation:
+
+- https://docs.docker.com/reference/cli/docker/compose/config/
+- https://docs.docker.com/reference/cli/docker/inspect/
+- https://docs.docker.com/reference/cli/docker/context/inspect/
+
+
+### B01: configuration inspection omitted inactive profiles
+
+The owner's first Batch B run passed all 55 tests in normal and optimized modes.
+Live status inspection reported api, db and nginx running and returned 0.
+Live preflight returned 4 with "Compose service set differs from the supported demo". Batch B acceptance remains open.
+
+Code review found that configuration inspection did not explicitly enable
+profiles, despite requiring the init service defined under the tools profile.
+The original fake Compose fixture always supplied all four service definitions,
+so it did not exercise profile selection. Profile filtering is the suspected
+cause of the observed refusal; the terminal output alone does not show which
+service definitions were returned.
+
+Fix: configuration inspection now passes --profile "*" to include all service
+profiles. The helper accepts only config --format json and refuses other
+subcommands, preventing accidental reuse of its all-profile selection for up,
+run or down. Configuration inspection does not start init or seed the database.
+The expected four-service check remains in place; extra services still fail.
+
+Two regression tests cover profile arguments through a fake Docker executable
+and rejection of mutation commands by this helper. The suite now has 57 test
+methods. These tests do not substitute for rerunning preflight with real Compose.
+Local verification of the fix on the owner's machine remains pending.
+
+Reference: https://docs.docker.com/compose/how-tos/profiles/
+
+
+### B01 local retest — passed
+
+After applying the profile-inspection correction, all 57 tests passed
+normally and under Python optimization, with warnings treated as errors,
+on the owner's Python 3.14.10 environment.
+
+Live preflight completed successfully with exit code 0. The selected
+candidate and running API resolved to the same immutable image ID.
+The earlier service-set refusal did not recur.
+
+This closes B01's pending local retest. It verifies the supported
+read-only inspection path for the existing demo, not deployment,
+HTTP behavior, release contents, locking, or operation-state handling.
+Failure scenarios covered by simulated tests have not all been
+reproduced against the live Docker daemon.

@@ -38,13 +38,15 @@ class CommandTests(unittest.TestCase):
         self.assertIn("nothing was changed", error)
 
     def test_status_does_not_claim_observed_health(self):
-        code, output, error = self.invoke(["status"])
-        self.assertEqual(code, 3)
-        self.assertEqual(output, "")
-        self.assertIn("not implemented", error)
+        with patch("toolkit.cli.inspect_status", return_value=[]):
+            code, output, error = self.invoke(["status"])
+        self.assertEqual(code, 0)
+        self.assertIn("no sdt-demo containers", output)
+        self.assertIn("OBSERVATION ONLY", output)
+        self.assertEqual(error, "")
 
     def test_help_succeeds(self):
-        for command in ([], ["validate"], ["deploy"], ["status"]):
+        for command in ([], ["validate"], ["deploy"], ["status"], ["preflight"]):
             with self.subTest(command=command):
                 self.assertEqual(self.invoke(command + ["--help"])[0], 0)
 
@@ -73,19 +75,32 @@ class CommandTests(unittest.TestCase):
         with patch("subprocess.Popen", side_effect=AssertionError("Unexpected subprocess")):
             self.assertEqual(self.invoke(self.arguments())[0], 0)
             self.assertEqual(self.invoke(self.arguments("deploy"))[0], 3)
-            self.assertEqual(self.invoke(["status"])[0], 3)
 
     def test_module_entry_point_from_empty_directory(self):
         root = str(Path(__file__).resolve().parents[1])
         environment = dict(os.environ, PYTHONPATH=root, PYTHONDONTWRITEBYTECODE="1")
         with tempfile.TemporaryDirectory() as directory:
-            for arguments, expected in ((self.arguments(), 0), (self.arguments("deploy"), 3), (["status"], 3)):
+            for arguments, expected in ((self.arguments(), 0), (self.arguments("deploy"), 3)):
                 result = subprocess.run(
                     [sys.executable, "-B", "-m", "toolkit", *arguments],
                     cwd=directory, env=environment, capture_output=True, text=True, timeout=10,
                 )
                 self.assertEqual(result.returncode, expected, result.stderr)
             self.assertEqual(list(Path(directory).iterdir()), [])
+
+    def test_preflight_pass_is_only_a_snapshot(self):
+        with patch("toolkit.cli.inspect_preflight", return_value={"candidate_image_id": "sha256:" + "a" * 64,
+                                                                "current_image_id": "sha256:" + "b" * 64}):
+            code, output, error = self.invoke(self.arguments("preflight"))
+        self.assertEqual(code, 0)
+        self.assertIn("READ-ONLY SNAPSHOT", output)
+
+    def test_preflight_and_status_failures_are_nonzero(self):
+        from toolkit.docker import InspectionError
+        for command, target in (("preflight", "inspect_preflight"), ("status", "inspect_status")):
+            with patch("toolkit.cli." + target, side_effect=InspectionError("Inspection unavailable")):
+                arguments = ["status"] if command == "status" else self.arguments(command)
+                self.assertEqual(self.invoke(arguments)[0], 4)
 
 
 class ConfigurationTests(unittest.TestCase):
