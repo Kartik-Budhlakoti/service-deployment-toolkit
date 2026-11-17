@@ -45,11 +45,23 @@ def _matches(pattern, value):
     return isinstance(value, str) and re.fullmatch(pattern, value) is not None
 
 
+CHECK_NAMES = ("container", "liveness", "identity", "catalogue", "proxy")
+
+
 def _check_record(record):
-    if type(record) is not dict or set(record) != {
-        "id", "status", "image_id", "release", "started_at", "finished_at"
-    }:
+    required = {"id", "status", "image_id", "release", "started_at", "finished_at"}
+    if type(record) is not dict or set(record) not in (required, required | {"action", "checks"}):
         raise ValueError
+    if "action" in record:
+        if record["action"] not in ("verify-only", "replace"):
+            raise ValueError
+        if record["status"] == "pending":
+            if record["checks"] is not None:
+                raise ValueError
+        else:
+            _check_results(record["checks"])
+            if record["status"] == "succeeded" and not all(record["checks"].values()):
+                raise ValueError
     if not _matches(r"[0-9a-f]{32}", record["id"]):
         raise ValueError
     if not _matches(r"sha256:[0-9a-f]{64}", record["image_id"]):
@@ -66,6 +78,12 @@ def _check_record(record):
     finished = datetime.fromisoformat(record["finished_at"])
     if finished.utcoffset() != timezone.utc.utcoffset(None):
         raise ValueError
+
+
+def _check_results(checks):
+    if (type(checks) is not dict or set(checks) != set(CHECK_NAMES)
+            or any(type(value) is not bool for value in checks.values())):
+        raise ValueError("Expected five boolean check results")
 
 
 def _read_json(path):
@@ -92,11 +110,13 @@ def read_state(root=None):
             return EMPTY.copy()
         if type(state) is not dict or state.keys() != EMPTY.keys():
             raise ValueError
-        if type(state["version"]) is not int or state["version"] != 1:
+        if type(state["version"]) is not int or state["version"] not in (1, 2):
             raise ValueError
         latest = state["latest"]
         last_success = state["last_success"]
         _check_record(latest)
+        if state["version"] == 2 and ("action" not in latest or not initialized):
+            raise ValueError
         if last_success is not None:
             _check_record(last_success)
             if last_success["status"] != "succeeded":
@@ -159,12 +179,14 @@ class OperationJournal:
         self._state = state
         self._closed = False
 
-    def begin(self, image_id, release):
+    def begin(self, image_id, release, action=None):
         if self._closed:
             raise RuntimeError("Operation session is closed")
         if not _matches(r"sha256:[0-9a-f]{64}", image_id):
             raise ConfigurationError("Recording requires a full SHA-256 image ID")
         validate_release(release)
+        if action is not None and action not in ("verify-only", "replace"):
+            raise ValueError("Unknown operation action")
         latest = self._state["latest"]
         if latest is not None and latest["status"] == "pending":
             raise StateUncertain("An unfinished operation requires inspection")
@@ -176,6 +198,8 @@ class OperationJournal:
             "started_at": datetime.now(timezone.utc).isoformat(),
             "finished_at": None,
         }
+        if action is not None:
+            record.update(action=action, checks=None)
         try:
             # Save the marker first: interruption here must not look like first use.
             if not _read_marker(self._directory):
@@ -191,7 +215,7 @@ class OperationJournal:
             raise
         return record["id"]
 
-    def finish(self, operation_id, outcome):
+    def finish(self, operation_id, outcome, checks=None):
         if self._closed:
             raise RuntimeError("Operation session is closed")
         latest = self._state["latest"]
@@ -200,11 +224,18 @@ class OperationJournal:
         if outcome not in ("succeeded", "failed"):
             raise ValueError("Finish requires a known success or failure")
         record = dict(latest, status=outcome, finished_at=datetime.now(timezone.utc).isoformat())
+        if "action" in record:
+            _check_results(checks)
+            if outcome == "succeeded" and not all(checks.values()):
+                raise ValueError("Success requires all checks to pass")
+            record["checks"] = dict(checks)
+        elif checks is not None:
+            raise ValueError("Legacy records do not support check results")
         last_success = record if outcome == "succeeded" else self._state["last_success"]
         self._save(record, last_success)
 
     def _save(self, record, last_success):
-        state = {"version": 1, "latest": record, "last_success": last_success}
+        state = {"version": 2 if "action" in record else 1, "latest": record, "last_success": last_success}
         try:
             _write_json(self._directory / "state.json", state)
         except RecordError:

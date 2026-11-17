@@ -1,9 +1,9 @@
 # Phase 2 contract and verification
 
-Current status: A–C and the stopped-API revision are implemented. The corrective
-batch strengthens journal and subprocess handling. Live deployment is still
-unavailable; Batch D and Phase 3 reconciliation remain pending. Earlier sections
-are historical batch records; later corrections explicitly supersede them.
+Current status: Batch D deployment integration is implemented with automated
+verification. Owner-side live acceptance is pending. Phase 3 reconciliation and
+recovery remain future work. Earlier sections are historical batch records;
+later corrections explicitly supersede them.
 
 ## Batch A: command interface (historical acceptance record)
 
@@ -433,3 +433,166 @@ passed again, and final preflight observed the API running.
 These results verify stopped-API preflight acceptance and subsequent service
 recovery. They do not establish deployment of a different image, rollback,
 live deployment interruption handling, or power-loss durability.
+
+## Batch D: deployment integration
+
+Base: corrective commit `7f31f39`. This section supersedes earlier statements
+that deploy is unavailable. No rollback or reconciliation command is added.
+
+### Operation order
+
+1. Validate the project directory and select the supported local Docker endpoint.
+2. Acquire the per-checkout mutation lock and refuse uncertain journal state.
+3. Inspect ownership, resources and candidate image; validate supported API
+   settings and retain configuration fingerprints only in memory.
+4. Repeat preflight using the resolved immutable ID; refuse observed resource drift.
+5. Persist pending intent with action verify-only or replace.
+6. If replacing, write the strict API image override and invoke API-only Compose up
+   with no build, pull, dependency startup or database initialization.
+7. Verify all five groups within one shared deadline, recheck configuration, and
+   record succeeded or failed. Only verified success updates last_success.
+
+A matching running image is verified without replacement. A stopped owned API
+requires replacement even for the same image. All five groups must pass within
+one accepted attempt; individual passes are not accumulated across attempts.
+
+| Group | Required observations |
+|---|---|
+| container | Owned API running before/after HTTP checks, stable ID/image/restart count; original dependency IDs retained |
+| liveness | Direct /health/live returns HTTP 200 and the expected body |
+| identity | Expected immutable container image plus matching /version through API and proxy |
+| catalogue | Direct /items returns HTTP 200 and exactly the three typed fixtures |
+| proxy | Proxied /items returns HTTP 200 and the same fixtures |
+
+Each HTTP worker refuses redirects, bypasses HTTP proxy environment variables,
+reads at most 65,537 bytes and rejects bodies over 65,536 bytes. Its parent bounds
+elapsed work, including slow response headers/body. Docker calls and retry sleeps
+are capped to the remaining verification budget. Cleanup has an additional wait
+allowance of up to two seconds per command. Scheduling and filesystem operations
+are not hard real-time guarantees. There is no new dependency package.
+
+### Records and failures
+
+Version-2 snapshots retain the original identity/timestamp fields and add action
+and checks. Pending checks are null; completed records contain five booleans. False means no accepted pass in the
+final attempt, including a check that could not run before the deadline; it is
+not proof of a specific root cause.
+Legacy successes can remain last_success until replaced by a new verified result.
+New-format snapshots require the initialization marker. Archives retain the record
+format of the archived operation; there is no destructive journal reset.
+
+Exit codes: 0 verified and recorded; 1 verification failed and recorded; 2 invalid
+input; 4 preflight refused; 5 lock contention; 6 uncertain state/outcome; 7 required
+recording failed; 130 keyboard interruption. A command error after requesting
+replacement conservatively retains pending intent, even for a nonzero exit.
+The tool attempts at most ten seconds of verification observations and prints
+facts without finalizing the operation. There is no retry or rollback.
+
+Recording failure takes precedence over success. Unexpected internal errors after
+begin and interruptions leave pending intent for inspection. A hard kill may
+produce no message. Refusals before begin and read-only commands do not create
+operation records. Full diagnostic reports remain Phase 4 work.
+
+### Configuration and ownership
+
+Only the supported base file and the exact generated image-only override are
+accepted in API ownership labels. Dependency containers must retain base-file
+labels. The override must contain only services.api.image with a full local ID.
+Its image must match a container claiming that override. Arbitrary override paths,
+extra fields, API hooks, command overrides and unexpected API settings are refused.
+
+The candidate must keep UID/GID 10001:10001. The API retains read-only filesystem,
+dropped capabilities and no-new-privileges. Candidate code remains trusted.
+The three fingerprinted files are compose.yaml, .env and demo/nginx/default.conf;
+values and hashes are not printed or written to operation history. These checks
+are not full runtime configuration equality or cross-release compatibility proof.
+
+### Acceptance boundary
+
+Automated tests include real journal/filesystem operations, child processes and
+loopback HTTP servers. Simulated-daemon tests integrate real preflight, journal and
+verification code, including a second deployment after a toolkit-owned replacement.
+They do not establish installed Docker/Compose metadata behavior.
+
+Owner-side acceptance must demonstrate verify-only success, expected-release
+failure with previous success preserved, stopped-API replacement, and a separately
+built changed image with unchanged dependency container IDs. Live command timeout,
+hard interruption and recovery remain additional exercises; do not claim them from
+simulated results. Do not deliberately create pending production-demo state merely
+to clear it by deleting journal files.
+
+Primary command references checked:
+- https://docs.docker.com/reference/cli/docker/compose/up/
+- https://docs.docker.com/compose/how-tos/multiple-compose-files/merge/
+
+### Batch D assistant verification
+
+All 149 test methods passed normally and under Python optimization, with warnings
+as errors, on Python 3.12.14. pip check and git diff --check passed. Tests cover
+journal ordering, both selected deployment paths, resource drift, refusal paths,
+recording errors, uncertain command results, legacy/new state, bounded HTTP work,
+redirect/body refusal and exact override ownership. Simulated-daemon integration
+also exercised a replacement followed by a verify-only operation.
+
+No Docker executable was available in the assistant environment. Owner-side
+Python 3.14 tests and all Batch D live acceptance stages remain pending. These
+results do not establish Docker version compatibility or live recovery behavior.
+
+### Batch D fix 1 — startup defaults and HTTP cleanup
+
+The owner's first Batch D run reported 149 passing tests in both modes, but
+HTTPError response cleanup emitted ResourceWarnings during object destruction.
+That run is not recorded as warning-free. Live acceptance stopped before an
+operation was recorded: the deployment configuration allowlist rejected the
+resolved API fields `command` and `entrypoint`. Their values were not included
+in the diagnostic output.
+
+The guard now accepts these two fields only when absent or null, preserving
+image startup defaults. Every non-null value, including an empty string or
+empty list, remains unsupported. Other unrecognized fields remain rejected.
+HTTP probes explicitly close HTTPError responses before reporting failure.
+Regression tests cover closure for 302 and 503 responses, null startup fields,
+non-null refusal, and refusal before recording or container replacement.
+
+Fix verification in the assistant environment: 149 toolkit and smoke-checker
+tests passed normally and with optimization, with warnings treated as errors,
+on Python 3.12.14. The four API tests could not run there because psycopg was
+unavailable; an initial full-suite attempt failed at that import. The owner
+must rerun all 153 tests on Python 3.14.10 and repeat live acceptance. Docker
+execution and the owner's startup-field values remain unverified for this fix.
+
+
+### Batch D owner verification after fix 1 — passed
+
+All 153 tests passed normally and with Python optimization enabled,
+with warnings treated as errors, on the owner's Python 3.14.10
+environment. The previous HTTPError cleanup warnings were absent.
+The dependency check reported no broken requirements.
+
+The resolved API command and entrypoint fields both used image
+defaults. The corrected deployment configuration guard accepted them.
+
+All three live acceptance stages passed:
+
+- Verify-only: the matching running image passed verification without
+  container replacement. A deliberately incorrect expected release
+  failed identity verification while preserving the previous successful
+  record. A subsequent verification of demo-v1 passed.
+- Stopped API: the toolkit replaced the stopped, owned API. All five
+  verification groups passed, and database and NGINX container IDs
+  remained unchanged. A subsequent verify-only operation accepted the
+  toolkit-created API.
+- Candidate image: a separately built demo-v2 image was deployed and
+  verified while dependency container identities were retained.
+  An explicit deployment of the original image then restored demo-v1
+  and passed verification. The candidate image was retained locally.
+
+Final status reported a successful replacement operation for demo-v1.
+Smoke checks passed through both the direct API and NGINX paths.
+
+These results demonstrate the exercised local deployment and
+verification paths. Redeploying the original image was an explicit
+deployment, not an automatic rollback or a dedicated rollback command.
+Live interruption handling, command-timeout uncertainty, and recovery
+from recording failures were not established by these exercises.
+Checks establish point-in-time observations, not continuous availability.

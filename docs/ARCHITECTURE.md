@@ -1,8 +1,8 @@
 # Architecture
 
-Status: Phase 1 merged. Phase 2 input validation, read-only inspection and
-journal/lock primitives are implemented. The corrective batch strengthens these
-components; live deployment, reconciliation and recovery remain pending.
+Status: Phase 1 merged. Phase 2 Batch D integrates deployment, verification,
+inspection and journal/lock components. Automated checks are available; owner-side
+live deployment acceptance is pending. Recovery and reconciliation remain Phase 3.
 
 ## Purpose and scope
 
@@ -96,11 +96,11 @@ A separate 19-package development lock includes the test client and its
 additional dependencies. Base-image references are digest-pinned. The working
 application tag `sdt-demo-api:phase1` remains mutable.
 
-## Planned deployment verification
+## Deployment verification
 
-The five post-deployment check types below remain Batch D requirements. Input
-validation, local image resolution and targeted resource inspection are already
-implemented. Journal/lock primitives exist but are not yet integrated with mutation.
+Batch D implements the five check groups below and integrates preflight and
+operation recording under the mutation lock. Success is a point-in-time result;
+real Docker acceptance remains separate from simulated tests.
 
 Preflight checks must validate configuration, Docker access, image availability,
 resource ownership, deployment locking, and recorded operation state before
@@ -115,7 +115,10 @@ Five post-deployment check types are planned:
 4. A database-backed catalogue response with expected synthetic content.
 5. The catalogue response through NGINX.
 
-The verifier must have explicit deadlines, request timeouts, and bounded retries.
+The verifier shares a monotonic deadline across attempts, caps each request and
+Docker query to the remaining budget, and bounds response bodies. HTTP probes
+run in child processes; process cleanup has a separate two-second wait budget.
+It retries until success or deadline, without accumulating passes across attempts.
 Readiness assists startup and diagnosis; it does not replace catalogue checks.
 Passing the checks establishes only the tested conditions, not complete
 correctness, security, or future availability.
@@ -147,7 +150,7 @@ a failed candidate must not overwrite the previous successful release reference.
 Incomplete operations, inconsistent state, or unreadable state require inspection
 before further mutations. Unknown state must not be treated as success. Read-only
 status and diagnosis should remain available. The current JSON state format is
-implemented; reconciliation remains Phase 3 work. The deployment command must integrate these primitives before acceptance.
+implemented and integrated with deployment; reconciliation remains Phase 3 work.
 
 Each operation must attempt a small local JSON record and print a concise result.
 Deployment and recovery outcomes are separate. Failure evidence must be bounded,
@@ -171,8 +174,7 @@ Already configured for the demo:
   build context. This does not detect secrets placed in other files or remove
   a secret that was already tracked.
 
-Toolkit boundaries (inspection implements targeted checks; mutation enforcement
-remains pending):
+Toolkit boundaries (targeted checks are performed under the deployment lock):
 
 - Operate only on the configured local Docker environment.
 - Verify ownership and refuse silent adoption of conflicting resources.
@@ -211,13 +213,35 @@ database rollback, high availability, zero-downtime guarantees, and a web dashbo
 
 ## Approved timeout policy
 
-A deployment-command timeout starts as an uncertain outcome, not a confirmed
-application failure. Batch D must stop local command processes as far as possible,
-keep pending intent, and attempt bounded read-only observations. Observed image
+A deployment-command timeout or other unconfirmed command result starts as an
+uncertain outcome, not a confirmed application failure. Batch D cleans up local
+command processes as far as possible, keeps pending intent, and attempts up to
+ten seconds of read-only observations. Observed image
 identity and HTTP results must not silently finalize an uncertain operation.
 There is no automatic retry or rollback on timeout. Phase 3 reconciliation must
 resolve uncertainty before another mutation. Docker daemon work and children
 that deliberately escape the local process group are outside cleanup guarantees.
 
-Inspection commands already use isolated process groups and bounded cleanup.
+Inspection, deployment and HTTP-probe commands use isolated process groups and
+bounded cleanup.
 This is local subprocess handling, not evidence of completed Docker mutations.
+
+## Batch D replacement boundary
+
+The generated override changes only `services.api.image`, using the resolved
+full local image ID. Compose receives explicit project/base/override arguments
+and `up -d --no-deps --no-build --pull never --force-recreate api`.
+Ownership accepts the exact base-file label or, for the API only, the exact
+base-plus-toolkit-override label with an image matching the validated override.
+Foreign override paths and unexpected override fields are refused.
+
+Two resource snapshots precede pending intent; the second uses the resolved ID.
+Only a matching running image takes the verify-only path. The verifier brackets
+HTTP checks with container observations and checks that dependency container IDs
+have not changed. Brief failures between samples may still escape observation.
+
+Configuration file fingerprints stay in memory and are checked during the
+operation. They cover compose.yaml, .env and the NGINX bind-mounted configuration;
+they are not persisted secret hashes or a general runtime drift detector. External
+Docker commands and file edits can still race with the toolkit. Phase 3 must
+implement the separate cross-release compatibility checks for automatic recovery.

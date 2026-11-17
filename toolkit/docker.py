@@ -1,10 +1,8 @@
 import json
 import os
 from pathlib import Path
-import selectors
-import signal
-import subprocess
-import time
+
+from .processes import CommandError, run_command
 
 
 class InspectionError(RuntimeError):
@@ -28,63 +26,9 @@ class Docker:
 
     def _run(self, arguments):
         try:
-            process = subprocess.Popen(
-                ["docker", *arguments], cwd=self.root, env=self.environment,
-                stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                start_new_session=True,
-            )
-        except OSError:
-            raise InspectionError("Could not launch Docker; check installation and project directory") from None
-        deadline = time.monotonic() + self.timeout
-        output = bytearray()
-        total = 0
-        try:
-            with selectors.DefaultSelector() as selector:
-                for stream in (process.stdout, process.stderr):
-                    os.set_blocking(stream.fileno(), False)
-                    selector.register(stream, selectors.EVENT_READ)
-                while selector.get_map():
-                    remaining = deadline - time.monotonic()
-                    if remaining <= 0:
-                        raise InspectionError("Docker inspection timed out; no toolkit mutation was requested")
-                    for key, _ in selector.select(min(remaining, 0.1)):
-                        chunk = os.read(key.fileobj.fileno(), 65536)
-                        if not chunk:
-                            selector.unregister(key.fileobj)
-                            continue
-                        total += len(chunk)
-                        if total > 1024 * 1024:
-                            raise InspectionError("Docker inspection output exceeded the 1 MiB limit")
-                        if key.fileobj is process.stdout:
-                            output.extend(chunk)
-                remaining = deadline - time.monotonic()
-                if remaining <= 0:
-                    raise InspectionError("Docker inspection timed out")
-                try:
-                    code = process.wait(timeout=remaining)
-                except subprocess.TimeoutExpired:
-                    raise InspectionError("Docker inspection timed out") from None
-            if code:
-                raise InspectionError("Docker inspection command failed; raw output withheld to avoid exposing configuration")
-            try:
-                return output.decode("utf-8")
-            except UnicodeDecodeError:
-                raise InspectionError("Docker returned invalid text") from None
-        except OSError:
-            raise InspectionError("Docker inspection I/O failed; no toolkit mutation was requested") from None
-        finally:
-            try:
-                # Include ordinary child processes such as the Compose plugin.
-                try:
-                    os.killpg(process.pid, signal.SIGKILL)
-                except ProcessLookupError:
-                    pass
-                process.wait(timeout=2)
-            except (OSError, subprocess.TimeoutExpired):
-                raise InspectionError("Local Docker command cleanup could not be confirmed") from None
-            finally:
-                process.stdout.close()
-                process.stderr.close()
+            return run_command(["docker", *arguments], self.root, self.environment, self.timeout)
+        except CommandError as error:
+            raise InspectionError(str(error)) from None
 
     def text(self, *arguments):
         return self._run(["--context", "default", *arguments]).strip()

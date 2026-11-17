@@ -1,8 +1,8 @@
 # Known Issues and Limitations
 
-Status: Phase 1 merged; Phase 2 inspection and journal/lock components are
-implemented. The corrective batch is implemented for local verification. Live
-deployment, rollback, reconciliation, detailed diagnostics and CI remain pending.
+Status: Phase 1 merged. Phase 2 Batch D deployment integration is implemented
+with automated checks. Owner-side live deployment acceptance, rollback,
+reconciliation, detailed diagnostics and CI remain pending.
 
 ## Phase 1 verification record (historical)
 
@@ -62,11 +62,11 @@ and optimized modes, including a fresh development-lock installation.
 
 ## Current limitations and open verification gaps
 
-- The CLI validates inputs, inspects resources and reads local state. Journal and
-  lock primitives exist. Live deployment, rollback, full operation reports and CI
-  are not implemented.
-- Toolkit preflight enforces targeted ownership checks as a read-only snapshot.
-  Manual Compose commands bypass those checks; deployment integration remains pending.
+- The CLI implements deployment with journal/lock integration and five verification
+  groups. Live owner acceptance is pending. Rollback, reconciliation, full
+  diagnostic reports and CI are not implemented.
+- Deployment repeats targeted ownership checks under its lock. Manual Compose
+  commands bypass these checks and can invalidate local operation history.
 - The demo targets one Linux host and one known workload. It has no authentication,
   real health data, high-availability behavior, or continuous self-healing.
 - Readiness checks table access, not complete fixture contents. The smoke checker
@@ -154,3 +154,29 @@ The owner's corrective-batch tests and live stopped-API exercise passed.
 The results and their boundaries are recorded in
 [Phase 2 verification](PHASE-2-VERIFICATION.md).
 Do not interpret this patch as proof of live deployment interruption handling.
+
+## Batch D limitations
+
+- The baseline is trusted local operators and trusted demo images, not execution
+  of arbitrary third-party images in a security sandbox. Candidate UID/GID must
+  match the demo. Image contents and entrypoint behavior are not audited here.
+- Preflight observations do not lock Docker itself. External mutations may race
+  with image selection, replacement and verification. Container checks sample
+  states; no continuous-health or zero-downtime guarantee is made.
+- Command failures, including nonzero results after partial work, conservatively
+  retain pending intent. A healthy observation after timeout is not proof of a
+  settled operation. There is no safe reset/reconcile command in this phase.
+- Overall deployment time includes preflight commands, replacement, verification
+  and cleanup. The verification setting is not a total deployment timeout.
+- The command runner is Linux-specific (process groups and waitid). It cannot
+  cancel daemon work or children that deliberately escape the process group.
+- Current configuration checks cover selected demo settings and three files.
+  They do not prove all live environment/configuration matches Compose, detect
+  every edit-and-revert race, or support extra configuration fragments/hooks.
+- The generated override is retained. Plain Compose up can restore the base
+  image without toolkit recording; resume existing containers with start.
+- Records now include action and check results. Detailed observations after an
+  uncertain command are printed, not saved as a full diagnostic report. Refusals
+  before begin and read-only commands are not persistent deployment operations.
+- New version-2 snapshots require the initialization marker. Legacy version-1
+  records remain readable. This is local history, not durable backup storage.

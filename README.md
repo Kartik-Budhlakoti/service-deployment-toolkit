@@ -1,15 +1,15 @@
 # Service Deployment Toolkit
 
 A local project for checking containerized releases and recovering from failed
-deployments. The CLI currently validates inputs and inspects Docker resources
-and local operation history. Live deployment and recovery are not implemented
-yet. The demonstration workload is a small FastAPI catalogue, PostgreSQL, and NGINX.
+deployments. The CLI validates inputs, inspects resources, and deploys or verifies
+a local API image while recording the outcome. Recovery remains future work.
+The demonstration workload is a small FastAPI catalogue, PostgreSQL, and NGINX.
 
 ## Current status
 
-Phase 1 is merged. Phase 2 Batches A–C and the stopped-API preflight revision
-are implemented. The corrective batch adds journal-loss detection, isolated CLI
-tests and process-group cleanup. Batch D deployment integration is pending.
+Phase 1 is merged. Phase 2 Batch D connects preflight, locking, records and
+verification to API-only deployment. Automated verification is recorded below;
+owner-side live deployment acceptance is pending. No rollback command exists yet.
 
 The demo has been exercised on EndeavourOS x86_64 with Python 3.14.10,
 Docker Engine 29.9.3, and Compose 5.7.1. These are tested versions, not a claim
@@ -101,12 +101,14 @@ To resume the existing installation using its locally available images and
 unchanged configuration:
 
 ```bash
-docker compose up -d --no-build --pull never --wait --wait-timeout 120 db api nginx &&
+docker compose start --wait --wait-timeout 120 db api nginx &&
 python tests/smoke.py
 ```
 
-If an image is missing, investigate before rebuilding or pulling it. Resume is
-not the procedure for deploying a changed application.
+These resume commands start existing containers; they do not recreate missing
+ones. Investigate missing containers or images before rebuilding. After toolkit
+deployment, plain `docker compose up` can reapply the base Phase 1 image, bypassing
+toolkit records. Use the toolkit for release changes; do not use resume as deployment.
 
 Keep the existing `.env` and named volume. Do not reseed to conceal a failed
 persistence check. Changing `POSTGRES_PASSWORD` in `.env` does not update an
@@ -175,19 +177,45 @@ Validation checks input shape only. Status reports local records and observed
 container states, not application health. Preflight checks supported ownership,
 resources and local image identity; it neither deploys nor verifies HTTP behavior.
 An owned stopped API is permitted, but the database and proxy must be running.
-`deploy` still exits 3 (unavailable).
+`deploy` is now implemented. It acquires the lock, checks resources, records
+pending intent and either verifies the matching running image or replaces only
+the API. A matching stopped API still requires replacement.
 
-Journal primitives use a per-checkout lock and `.runtime/toolkit/`. Their use by
-live deployments is pending. Once initialized, a missing snapshot is refused if
+Deployment uses a per-checkout lock and `.runtime/toolkit/`. A pending operation
+blocks another deployment; read-only status remains available. Once initialized, a missing snapshot is refused if
 its initialization marker remains. Never delete operation state to bypass a
 refusal. Read-only commands do not create or upgrade journals.
 
+## Deploy a local image
+
+Build the intended image separately. The toolkit never pulls or builds it, seeds
+the database, or requests dependency replacement. Candidates must preserve the
+demo image user `10001:10001` and the existing API contract.
+
+```bash
+python -m toolkit deploy --image sdt-demo-api:phase1 --release demo-v1
+```
+
+The current running Phase 1 image normally takes the `verify-only` path. This
+still records a real verification operation. When replacement is required, a
+strict image-only override is written to `.runtime/toolkit/compose-image.json`.
+The base Compose file and working image tag are not edited.
+
+Success requires container state, liveness, expected image/release, direct
+catalogue and proxy catalogue checks in one accepted attempt. The journal records
+`action` and five check results. Failure returns nonzero; no rollback occurs.
+After an uncertain command result, the tool attempts up to ten seconds of
+read-only verification observations and retains pending intent even if they pass.
+Do not delete that record to retry. Reconciliation remains Phase 3 work.
+
+See [Phase 2 verification](docs/PHASE-2-VERIFICATION.md) for timing, exit codes,
+configuration boundaries, and the distinction between tests and live acceptance.
+
 ## Next phases and boundaries
 
-Next comes integration of image selection, ownership checks, locking and operation
-records with real API replacement and five deployment verification check types.
-Manual rollback will be the default; automatic recovery will require opt-in and
-compatibility checks. Recovery and reconciliation remain Phase 3 work.
+Next comes live acceptance of the deployment workflow and Phase 2 closure.
+Manual rollback will be the default in Phase 3; automatic recovery will require
+opt-in and compatibility checks. Recovery and reconciliation are not implemented.
 
 The baseline targets one local stack. It excludes Kubernetes, paid hosting,
 AI classification, database rollback, high availability, and zero-downtime

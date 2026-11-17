@@ -306,3 +306,55 @@ class MarkerTests(unittest.TestCase):
         self.assertEqual((self.directory / "state.json").read_bytes(), before)
         self.assertEqual(list(self.directory.glob("operation-*.json")), [])
         self.assertEqual(read_state(self.root)["last_success"]["id"], first)
+
+
+class DeploymentRecordTests(unittest.TestCase):
+    setUp = OperationTests.setUp
+
+    def test_action_and_results_survive_round_trip(self):
+        from toolkit.state import CHECK_NAMES
+        with operation_session(self.root) as journal:
+            operation = journal.begin(IMAGE, 'demo-v1', action='verify-only')
+            journal.finish(operation, 'succeeded', checks=dict.fromkeys(CHECK_NAMES, True))
+        state = read_state(self.root)
+        self.assertEqual(state['version'], 2)
+        self.assertEqual(state['latest']['action'], 'verify-only')
+        self.assertEqual(state['last_success'], state['latest'])
+
+    def test_legacy_success_retained_by_new_failed_operation(self):
+        from toolkit.state import CHECK_NAMES
+        with operation_session(self.root) as journal:
+            old = journal.begin(IMAGE, 'demo-v1')
+            journal.finish(old, 'succeeded')
+        with operation_session(self.root) as journal:
+            new = journal.begin(NEXT_IMAGE, 'demo-v2', action='replace')
+            journal.finish(new, 'failed', checks=dict.fromkeys(CHECK_NAMES, False))
+        self.assertEqual(read_state(self.root)['last_success']['id'], old)
+
+    def test_invalid_action_is_refused_before_marker(self):
+        with operation_session(self.root) as journal:
+            with self.assertRaises(ValueError):
+                journal.begin(IMAGE, 'demo-v1', action='rollback')
+        self.assertIsNone(read_state(self.root)['latest'])
+
+    def test_success_with_failed_checks_is_refused(self):
+        from toolkit.state import CHECK_NAMES
+        with operation_session(self.root) as journal:
+            op = journal.begin(IMAGE, 'demo-v1', action='replace')
+            with self.assertRaises(ValueError):
+                journal.finish(op, 'succeeded', checks=dict.fromkeys(CHECK_NAMES, False))
+        self.assertEqual(read_state(self.root)['latest']['status'], 'pending')
+
+    def test_incomplete_check_map_is_refused(self):
+        with operation_session(self.root) as journal:
+            op = journal.begin(IMAGE, 'demo-v1', action='replace')
+            with self.assertRaises(ValueError):
+                journal.finish(op, 'failed', checks={'container': False})
+        self.assertEqual(read_state(self.root)['latest']['status'], 'pending')
+
+    def test_new_format_requires_marker(self):
+        with operation_session(self.root) as journal:
+            journal.begin(IMAGE, 'demo-v1', action='replace')
+        (self.directory / 'initialized.json').unlink()
+        with self.assertRaises(StateUncertain):
+            read_state(self.root)

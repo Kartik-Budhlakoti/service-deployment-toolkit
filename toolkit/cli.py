@@ -3,6 +3,7 @@ import sys
 
 from .config import ConfigurationError, DeploymentRequest, ExitCode, Settings
 from .docker import InspectionError
+from .deploy import deploy
 from .preflight import inspect_preflight, inspect_status
 from .state import StateUncertain, read_state
 
@@ -21,7 +22,7 @@ def build_parser():
     for command, description in (
         ("validate", "Validate deployment inputs without contacting Docker."),
         ("preflight", "Inspect the candidate image and existing demo resources without changing them."),
-        ("deploy", "Reserved for deployment (not implemented)."),
+        ("deploy", "Deploy or verify a local image; no automatic rollback."),
     ):
         child = commands.add_parser(command, help=description, allow_abbrev=False)
         child.add_argument("--image", required=True, help="Explicit local tag, digest or full image ID.")
@@ -49,7 +50,8 @@ def main(argv=None):
                 print("OPERATION STATE: no recorded operations.")
             else:
                 print(f"LATEST OPERATION: {latest['id']} {latest['status']} "
-                      f"release={latest['release']} image={latest['image_id']}")
+                      f"release={latest['release']} image={latest['image_id']} "
+                      f"action={latest.get('action', 'legacy-unspecified')}")
                 if latest["status"] == "pending":
                     print("STATE UNCERTAIN: an unfinished operation requires inspection.", file=sys.stderr)
                     state_code = ExitCode.STATE_UNCERTAIN
@@ -79,8 +81,7 @@ def main(argv=None):
         print(f"INVALID INPUT: {error}", file=sys.stderr)
         return ExitCode.INVALID_INPUT
     if args.command == "deploy":
-        print("UNAVAILABLE: deployment is scheduled for Batch D; nothing was changed.", file=sys.stderr)
-        return ExitCode.UNAVAILABLE
+        return deploy(request)
     if args.command == "preflight":
         try:
             result = inspect_preflight(request)

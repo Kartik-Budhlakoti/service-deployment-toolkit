@@ -2,6 +2,7 @@ from pathlib import Path
 import re
 
 from .docker import Docker, InspectionError
+from .override import config_label_allowed, override_path, read_override
 
 
 PROJECT = "sdt-demo"
@@ -103,7 +104,7 @@ def check_resources(items, root):
         require(labels.get(LABEL + "project") == PROJECT and labels.get(LABEL + "container-number") == "1"
                 and str(labels.get(LABEL + "oneoff")).lower() == "false", "Unexpected Compose container ownership")
         require(labels.get(LABEL + "project.working_dir") == str(root)
-                and labels.get(LABEL + "project.config_files") == str(root / "compose.yaml"),
+                and config_label_allowed(root, service, labels.get(LABEL + "project.config_files")),
                 "Container belongs to another checkout or Compose file; automatic adoption refused")
         require(item.get("Name") == f"/{PROJECT}-{service}-1", "Unexpected container name")
         state = item["State"]
@@ -137,6 +138,9 @@ def check_resources(items, root):
                     and mounts[0].get("Source") == str(root / "demo/nginx/default.conf")
                     and mounts[0].get("Destination") == "/etc/nginx/conf.d/default.conf"
                     and mounts[0].get("RW") is False, "Unexpected actual proxy mount")
+        if service == "api" and labels.get(LABEL + "project.config_files") == (
+                str(root / "compose.yaml") + "," + str(override_path(root))):
+            require(item.get("Image") == read_override(root), "API image differs from toolkit override")
         image_id({"Id": item.get("Image")})
         selected[service] = item
     return selected
@@ -179,6 +183,8 @@ def inspect_preflight(request, root=None, docker=None):
         require(required_ids <= attached_ids <= owned_ids,
                 "Demo network has missing or unexpected attached containers")
         return {"candidate_image_id": resolved, "current_image_id": selected["api"]["Image"],
-                "expected_release": request.release, "api_running": selected["api"]["State"]["Running"]}
+                "expected_release": request.release, "api_running": selected["api"]["State"]["Running"],
+                "api_id": selected["api"]["Id"],
+                "dependency_ids": {name: selected[name]["Id"] for name in ("db", "nginx")}}
     except (KeyError, TypeError, AttributeError, IndexError):
         raise InspectionError("Docker/Compose metadata has an unsupported or incomplete structure") from None

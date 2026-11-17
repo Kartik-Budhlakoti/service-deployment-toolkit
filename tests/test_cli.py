@@ -38,11 +38,11 @@ class CommandTests(unittest.TestCase):
         self.assertIn("have NOT been checked", output)
         self.assertEqual(error, "")
 
-    def test_valid_deploy_is_explicitly_unavailable(self):
-        code, output, error = self.invoke(self.arguments("deploy"))
-        self.assertEqual(code, 3)
-        self.assertEqual(output, "")
-        self.assertIn("nothing was changed", error)
+    def test_valid_deploy_dispatches_validated_request(self):
+        with patch("toolkit.cli.deploy", return_value=1) as action:
+            code, output, error = self.invoke(self.arguments("deploy"))
+        self.assertEqual(code, 1)
+        self.assertEqual(action.call_args.args[0].release, "demo-v1")
 
     def test_status_does_not_claim_observed_health(self):
         with patch("toolkit.cli.inspect_status", return_value=[]):
@@ -81,13 +81,12 @@ class CommandTests(unittest.TestCase):
     def test_commands_do_not_launch_subprocesses(self):
         with patch("subprocess.Popen", side_effect=AssertionError("Unexpected subprocess")):
             self.assertEqual(self.invoke(self.arguments())[0], 0)
-            self.assertEqual(self.invoke(self.arguments("deploy"))[0], 3)
 
     def test_module_entry_point_from_empty_directory(self):
         root = str(Path(__file__).resolve().parents[1])
         environment = dict(os.environ, PYTHONPATH=root, PYTHONDONTWRITEBYTECODE="1")
         with tempfile.TemporaryDirectory() as directory:
-            for arguments, expected in ((self.arguments(), 0), (self.arguments("deploy"), 3)):
+            for arguments, expected in ((self.arguments(), 0), (self.arguments("deploy"), 4)):
                 result = subprocess.run(
                     [sys.executable, "-B", "-m", "toolkit", *arguments],
                     cwd=directory, env=environment, capture_output=True, text=True, timeout=10,
