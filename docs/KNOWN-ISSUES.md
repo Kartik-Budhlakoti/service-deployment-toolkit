@@ -1,9 +1,10 @@
 # Known Issues and Limitations
 
-Status: Phase 1 demo implemented and checked locally; documentation and PR review
-are in progress. The deployment and recovery toolkit is not implemented yet.
+Status: Phase 1 merged; Phase 2 inspection and journal/lock components are
+implemented. The corrective batch is implemented for local verification. Live
+deployment, rollback, reconciliation, detailed diagnostics and CI remain pending.
 
-## Verification record
+## Phase 1 verification record (historical)
 
 The following summarizes local terminal runs reviewed during Phase 1, including
 the locked rebuild and fresh development-environment checks on 16 November 2026.
@@ -61,10 +62,11 @@ and optimized modes, including a fresh development-lock installation.
 
 ## Current limitations and open verification gaps
 
-- No deployment CLI, rollback command, release-state store, operation lock,
-  ownership enforcement, structured operation reports, or CI workflow exists yet.
-- Current Compose commands can change resources; the project's intended ownership
-  boundaries are not yet enforced by toolkit code.
+- The CLI validates inputs, inspects resources and reads local state. Journal and
+  lock primitives exist. Live deployment, rollback, full operation reports and CI
+  are not implemented.
+- Toolkit preflight enforces targeted ownership checks as a read-only snapshot.
+  Manual Compose commands bypass those checks; deployment integration remains pending.
 - The demo targets one Linux host and one known workload. It has no authentication,
   real health data, high-availability behavior, or continuous self-healing.
 - Readiness checks table access, not complete fixture contents. The smoke checker
@@ -108,8 +110,9 @@ configuration fact, not a comprehensive container-security audit.
 - A previously successful release may fail under changed external conditions.
 - Persistent storage is not a backup. Database backup and restore are out of scope.
 - Automatic recovery will require explicitly supported compatibility conditions.
-- The planned lock will coordinate toolkit operations, not external Docker commands.
-- Local operation records will not be tamper-proof audit records.
+- The implemented per-checkout lock coordinates participating toolkit processes,
+  not external Docker commands or other checkouts.
+- Local operation records are not tamper-proof audit records.
 - Diagnostic observations will not always establish a root cause.
 - Trusted operators, configuration, and demo images are assumed; Docker access
   does not create a security sandbox.
@@ -123,3 +126,31 @@ and verification evidence. Label suspected defects as unconfirmed until supporte
 A core acceptance failure blocks its phase. It must not be relabeled as an
 acceptable limitation simply to finish. Passing the recorded checks is not
 proof that no defects remain.
+
+## Corrective batch findings after commit 7397feb
+
+- C01: Two CLI tests read real checkout state while mocking Docker. A pending
+  journal caused false test failures. They now supply explicit empty state;
+  separate integration tests exercise uncertain state and Docker failure together.
+- C02: Inspection timeout killed only the direct child. A descendant could keep
+  running. Commands now start in a new session; cleanup kills their process group
+  and bounds the direct-child wait. Tests cover timeout, exited parent and output
+  overflow. This does not cancel Docker daemon work or contain escaped sessions.
+- C03: Losing the first pending snapshot looked like first use because no archives
+  existed. A durable marker now precedes the first pending record. A remaining
+  marker without a snapshot blocks mutation. Interrupted initialization can also
+  leave this conservative refusal, even though no deployment was requested.
+- C04: Overview documents still described Phase 1-only behavior. Current status
+  is updated while earlier acceptance results retain their historical counts.
+
+The marker is not a backup. Removing both marker and snapshot before any archives
+exist, or deleting the whole journal, can still erase evidence. Valid old-format
+snapshots without markers are accepted for compatibility; missing-marker loss
+cannot be distinguished from that legacy format. The next begin adds the marker
+under the lock. Pending or invalid legacy snapshots remain blocked. Previously
+lost legacy history cannot be reconstructed by this update.
+
+The owner's corrective-batch tests and live stopped-API exercise passed.
+The results and their boundaries are recorded in
+[Phase 2 verification](PHASE-2-VERIFICATION.md).
+Do not interpret this patch as proof of live deployment interruption handling.

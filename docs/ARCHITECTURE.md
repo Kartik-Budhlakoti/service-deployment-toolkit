@@ -1,7 +1,8 @@
 # Architecture
 
-Status: Phase 1 demo implemented and checked locally; documentation and PR
-review are in progress. The deployment and recovery toolkit is not implemented.
+Status: Phase 1 merged. Phase 2 input validation, read-only inspection and
+journal/lock primitives are implemented. The corrective batch strengthens these
+components; live deployment, reconciliation and recovery remain pending.
 
 ## Purpose and scope
 
@@ -22,7 +23,7 @@ and medical repositories and their Docker resources remain outside its control.
 | Database | PostgreSQL 18 with a dedicated named volume |
 | Proxy | NGINX forwarding to the Compose service `api` |
 | Initialization | Explicit one-off `init` service using the API image |
-| Unit tests | Four API failure tests and five smoke-checker regression tests |
+| Demo unit tests | Four API failure tests and five smoke-checker regression tests |
 | Live checker | `tests/smoke.py`, run on the host |
 
 The Compose project is `sdt-demo`; its database volume is
@@ -97,7 +98,9 @@ application tag `sdt-demo-api:phase1` remains mutable.
 
 ## Planned deployment verification
 
-The following describes requirements for Phase 2, not current capabilities.
+The five post-deployment check types below remain Batch D requirements. Input
+validation, local image resolution and targeted resource inspection are already
+implemented. Journal/lock primitives exist but are not yet integrated with mutation.
 
 Preflight checks must validate configuration, Docker access, image availability,
 resource ownership, deployment locking, and recorded operation state before
@@ -135,7 +138,7 @@ availability. Automatic recovery is attempted at most once per failed deployment
 and verified separately. A failed deployment returns a nonzero exit code even
 if recovery succeeds. A failed first deployment has no previous release to restore.
 
-## Planned state, interruption handling, and reporting
+## State, interruption handling, and reporting
 
 Mutating toolkit operations must share a lock. This cannot prevent external
 Docker commands. Operation progress must be recorded before replacement, and
@@ -143,16 +146,18 @@ a failed candidate must not overwrite the previous successful release reference.
 
 Incomplete operations, inconsistent state, or unreadable state require inspection
 before further mutations. Unknown state must not be treated as success. Read-only
-status and diagnosis should remain available. The state format and reconciliation
-procedure must be specified before the dependent implementation is accepted.
+status and diagnosis should remain available. The current JSON state format is
+implemented; reconciliation remains Phase 3 work. The deployment command must integrate these primitives before acceptance.
 
 Each operation must attempt a small local JSON record and print a concise result.
 Deployment and recovery outcomes are separate. Failure evidence must be bounded,
 distinguish observations from suspected causes, and avoid secret values, complete
 environment dumps, and unfiltered logs. Failure to save a report must be disclosed.
 
-Current `.runtime` files are local test evidence, not an implemented release-state
-store or tamper-proof audit trail.
+`.runtime/toolkit/` contains operation snapshots and archives when journal
+primitives are used. Phase 1 test evidence occupies a separate directory. These
+records are not a tamper-proof audit trail. See the Phase 2 contract for the
+initialization marker, legacy-journal handling and partial-loss limitations.
 
 ## Resource and security boundaries
 
@@ -166,7 +171,8 @@ Already configured for the demo:
   build context. This does not detect secrets placed in other files or remove
   a secret that was already tracked.
 
-Required for the future toolkit:
+Toolkit boundaries (inspection implements targeted checks; mutation enforcement
+remains pending):
 
 - Operate only on the configured local Docker environment.
 - Verify ownership and refuse silent adoption of conflicting resources.
@@ -202,3 +208,16 @@ are recorded in [Known issues and limitations](KNOWN-ISSUES.md).
 Kubernetes, Terraform, Jenkins, AI classification, public hosting, application
 authentication, real health data, database migrations, database backup and restore,
 database rollback, high availability, zero-downtime guarantees, and a web dashboard.
+
+## Approved timeout policy
+
+A deployment-command timeout starts as an uncertain outcome, not a confirmed
+application failure. Batch D must stop local command processes as far as possible,
+keep pending intent, and attempt bounded read-only observations. Observed image
+identity and HTTP results must not silently finalize an uncertain operation.
+There is no automatic retry or rollback on timeout. Phase 3 reconciliation must
+resolve uncertainty before another mutation. Docker daemon work and children
+that deliberately escape the local process group are outside cleanup guarantees.
+
+Inspection commands already use isolated process groups and bounded cleanup.
+This is local subprocess handling, not evidence of completed Docker mutations.

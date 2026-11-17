@@ -53,6 +53,50 @@ class DockerRunnerTests(unittest.TestCase):
         with self.assertRaisesRegex(InspectionError, "limit"):
             self.docker.text("info")
 
+    def run_descendant_case(self, parent_action, expected_error):
+        import signal
+        import time
+        pid_path = self.root / "child.pid"
+        child = "import time; time.sleep(30)"
+        self.program(
+            "import os, subprocess, sys, time\n"
+            "from pathlib import Path\n"
+            f"child = subprocess.Popen([sys.executable, '-c', {child!r}])\n"
+            f"Path({str(pid_path)!r}).write_text(str(child.pid))\n"
+            + parent_action + "\n"
+        )
+        self.docker.timeout = 1
+        try:
+            with self.assertRaisesRegex(InspectionError, expected_error):
+                self.docker.text("info")
+            self.assertTrue(pid_path.exists(), "Fake Docker did not start its child")
+            pid = int(pid_path.read_text())
+            deadline = time.monotonic() + 2
+            while time.monotonic() < deadline:
+                try:
+                    status = Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()[0]
+                except FileNotFoundError:
+                    return
+                if status == "Z":  # Exited; its new parent may not have reaped it yet.
+                    return
+                time.sleep(0.01)
+            self.fail("The child was still executing after runner cleanup")
+        finally:
+            if pid_path.exists():
+                try:
+                    os.kill(int(pid_path.read_text()), signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+
+    def test_timeout_stops_parent_and_child_group(self):
+        self.run_descendant_case("time.sleep(30)", "timed out")
+
+    def test_timeout_stops_child_even_after_parent_exits(self):
+        self.run_descendant_case("os._exit(0)", "timed out")
+
+    def test_output_limit_stops_child_group(self):
+        self.run_descendant_case("sys.stderr.write('x' * (1024 * 1024 + 1)); sys.stderr.flush(); time.sleep(30)", "limit")
+
     def test_remote_environment_override_refused(self):
         with patch.dict(os.environ, {"DOCKER_HOST": "tcp://example.invalid:2375"}):
             with self.assertRaises(InspectionError):

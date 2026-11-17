@@ -13,6 +13,13 @@ from toolkit.config import ConfigurationError, Settings, validate_image, validat
 
 
 class CommandTests(unittest.TestCase):
+    def setUp(self):
+        state = patch("toolkit.cli.read_state", return_value={
+            "version": 1, "latest": None, "last_success": None,
+        })
+        state.start()
+        self.addCleanup(state.stop)
+
     def invoke(self, arguments):
         stdout, stderr = io.StringIO(), io.StringIO()
         with redirect_stdout(stdout), redirect_stderr(stderr):

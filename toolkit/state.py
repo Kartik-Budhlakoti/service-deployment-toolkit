@@ -14,6 +14,7 @@ from .locking import mutation_lock
 
 MAX_RECORD_BYTES = 8192
 EMPTY = {"version": 1, "latest": None, "last_success": None}
+MARKER = {"version": 1, "purpose": "operation-journal"}
 
 
 class StateUncertain(RuntimeError):
@@ -82,10 +83,11 @@ def read_state(root=None):
     directory = state_directory(root)
     try:
         _check_directory(directory)
+        initialized = _read_marker(directory)
         try:
             state = _read_json(directory / "state.json")
         except FileNotFoundError:
-            if any(directory.glob("operation-*.json")):
+            if initialized or any(directory.glob("operation-*.json")):
                 raise ValueError
             return EMPTY.copy()
         if type(state) is not dict or state.keys() != EMPTY.keys():
@@ -107,6 +109,17 @@ def read_state(root=None):
         return state
     except (OSError, ValueError, TypeError, RecursionError):
         raise StateUncertain("Operation state is unreadable, invalid or unsupported") from None
+
+
+def _read_marker(directory):
+    try:
+        marker = _read_json(directory / "initialized.json")
+    except FileNotFoundError:
+        return False
+    if (type(marker) is not dict or marker != MARKER
+            or type(marker.get("version")) is not int):
+        raise ValueError("Invalid journal marker")
+    return True
 
 
 def _sync_directory(path):
@@ -153,10 +166,8 @@ class OperationJournal:
             raise ConfigurationError("Recording requires a full SHA-256 image ID")
         validate_release(release)
         latest = self._state["latest"]
-        if latest is not None:
-            if latest["status"] == "pending":
-                raise StateUncertain("An unfinished operation requires inspection")
-            _write_json(self._directory / f"operation-{latest['id']}.json", latest)
+        if latest is not None and latest["status"] == "pending":
+            raise StateUncertain("An unfinished operation requires inspection")
         record = {
             "id": uuid4().hex,
             "status": "pending",
@@ -165,7 +176,19 @@ class OperationJournal:
             "started_at": datetime.now(timezone.utc).isoformat(),
             "finished_at": None,
         }
-        self._save(record, self._state["last_success"])
+        try:
+            # Save the marker first: interruption here must not look like first use.
+            if not _read_marker(self._directory):
+                _write_json(self._directory / "initialized.json", MARKER)
+            if latest is not None:
+                _write_json(self._directory / f"operation-{latest['id']}.json", latest)
+            self._save(record, self._state["last_success"])
+        except (OSError, ValueError, RecursionError) as error:
+            self._closed = True
+            raise StateUncertain("Journal marker became unreadable or invalid") from error
+        except RecordError:
+            self._closed = True
+            raise
         return record["id"]
 
     def finish(self, operation_id, outcome):

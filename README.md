@@ -1,13 +1,15 @@
 # Service Deployment Toolkit
 
 A local project for checking containerized releases and recovering from failed
-deployments. The deployment and recovery CLI is still planned. The working
-foundation is a small FastAPI catalogue, PostgreSQL, and NGINX.
+deployments. The CLI currently validates inputs and inspects Docker resources
+and local operation history. Live deployment and recovery are not implemented
+yet. The demonstration workload is a small FastAPI catalogue, PostgreSQL, and NGINX.
 
 ## Current status
 
-Phase 1 implementation and local checks are complete; documentation and PR
-review are in progress. There is no automated deployment or rollback command yet.
+Phase 1 is merged. Phase 2 Batches A–C and the stopped-API preflight revision
+are implemented. The corrective batch adds journal-loss detection, isolated CLI
+tests and process-group cleanup. Batch D deployment integration is pending.
 
 The demo has been exercised on EndeavourOS x86_64 with Python 3.14.10,
 Docker Engine 29.9.3, and Compose 5.7.1. These are tested versions, not a claim
@@ -130,8 +132,10 @@ PYTHONPATH=demo python -W error -m unittest discover -s tests -p 'test_*.py' -v 
 PYTHONPATH=demo python -O -W error -m unittest discover -s tests -p 'test_*.py' -v
 ```
 
-There are nine unit tests, run in two modes. They use simulated database or HTTP
-behavior; they do not replace the live smoke check or manual integration exercises.
+The suite includes demo, CLI, preflight, subprocess and journal tests. It uses
+simulated database/Docker responses plus real temporary files and child processes.
+It does not replace live smoke checks or Docker integration exercises. Historical
+counts and current verification results are in the Phase 2 evidence document.
 
 `demo/requirements.txt` records direct runtime dependencies;
 `demo/requirements.lock` pins the observed runtime set used by Docker.
@@ -154,12 +158,36 @@ These are local results, not CI results or a complete clean-machine installation
 claim. Detailed evidence boundaries and remaining gaps are recorded in
 [Known issues and limitations](docs/KNOWN-ISSUES.md).
 
+## Current toolkit commands
+
+Run from this checkout's root. Inspection supports the default local Docker
+socket at `/var/run/docker.sock`; Desktop, rootless and remote contexts are not
+supported by the toolkit. The demo setup above is still required before preflight.
+
+```bash
+python -m toolkit --help
+python -m toolkit validate --image sdt-demo-api:phase1 --release demo-v1
+python -m toolkit status
+python -m toolkit preflight --image sdt-demo-api:phase1 --release demo-v1
+```
+
+Validation checks input shape only. Status reports local records and observed
+container states, not application health. Preflight checks supported ownership,
+resources and local image identity; it neither deploys nor verifies HTTP behavior.
+An owned stopped API is permitted, but the database and proxy must be running.
+`deploy` still exits 3 (unavailable).
+
+Journal primitives use a per-checkout lock and `.runtime/toolkit/`. Their use by
+live deployments is pending. Once initialized, a missing snapshot is refused if
+its initialization marker remains. Never delete operation state to bypass a
+refusal. Read-only commands do not create or upgrade journals.
+
 ## Next phases and boundaries
 
-Next comes explicit image selection, ownership checks, deployment locking,
-operation records, and five deployment verification check types. Manual rollback
-will be the default; automatic recovery will require opt-in and compatibility
-checks. None of these toolkit operations is implemented yet.
+Next comes integration of image selection, ownership checks, locking and operation
+records with real API replacement and five deployment verification check types.
+Manual rollback will be the default; automatic recovery will require opt-in and
+compatibility checks. Recovery and reconciliation remain Phase 3 work.
 
 The baseline targets one local stack. It excludes Kubernetes, paid hosting,
 AI classification, database rollback, high availability, and zero-downtime
@@ -168,6 +196,7 @@ guarantees. PostgreSQL persistence is not a backup.
 - [Architecture](docs/ARCHITECTURE.md)
 - [Decisions](docs/DECISIONS.md)
 - [Known issues and limitations](docs/KNOWN-ISSUES.md)
+- [Phase 2 contract and verification](docs/PHASE-2-VERIFICATION.md)
 
 ## License
 

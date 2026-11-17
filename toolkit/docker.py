@@ -2,6 +2,7 @@ import json
 import os
 from pathlib import Path
 import selectors
+import signal
 import subprocess
 import time
 
@@ -30,6 +31,7 @@ class Docker:
             process = subprocess.Popen(
                 ["docker", *arguments], cwd=self.root, env=self.environment,
                 stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                start_new_session=True,
             )
         except OSError:
             raise InspectionError("Could not launch Docker; check installation and project directory") from None
@@ -71,11 +73,18 @@ class Docker:
         except OSError:
             raise InspectionError("Docker inspection I/O failed; no toolkit mutation was requested") from None
         finally:
-            if process.poll() is None:
-                process.kill()
-            process.wait()
-            process.stdout.close()
-            process.stderr.close()
+            try:
+                # Include ordinary child processes such as the Compose plugin.
+                try:
+                    os.killpg(process.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                process.wait(timeout=2)
+            except (OSError, subprocess.TimeoutExpired):
+                raise InspectionError("Local Docker command cleanup could not be confirmed") from None
+            finally:
+                process.stdout.close()
+                process.stderr.close()
 
     def text(self, *arguments):
         return self._run(["--context", "default", *arguments]).strip()

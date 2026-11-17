@@ -1,7 +1,8 @@
 # Decisions
 
-Status: Phase 1 merged. Phase 2 Batches A–C are committed through `f17ad86`.
-Batch C passed 70 local tests in normal and optimized modes. Batch D is pending.
+Status: Phase 1 merged. Phase 2 Batches A–C and the stopped-API revision are
+committed through `7397feb`. The corrective batch is based on that commit; its
+local verification is recorded separately. Batch D is pending.
 
 A recorded decision alone does not establish that its behavior is implemented
 or verified. CLI validation, Docker inspection, and the operation journal/lock
@@ -165,4 +166,15 @@ project, if the owner considers it useful. Preserve reasons for changed decision
 superseded behavior explicitly. Routine code details can be chosen by the
 assistant, with consequential assumptions recorded for review.
 
+## Corrective batch decisions
 
+| ID | Choice | Reason and consequence |
+|---|---|---|
+| D34 | Persist an initialization marker before the first pending record. | User selected. A marker without a snapshot blocks mutation, including interrupted initialization. Valid legacy snapshots are upgraded before their next operation; complete deletion is not detectable. Implemented in this corrective batch. |
+| D35 | After a deployment timeout, preserve uncertainty and attempt bounded read-only observations. | User selected. Do not retry, roll back or mark success solely from a timeout or a later healthy snapshot. Reporting integration belongs to Batch D; reconciliation belongs to Phase 3. |
+| D36 | Isolate local command process groups and bound cleanup. | Assistant implementation detail supporting D35. Kills ordinary descendants without claiming cancellation of daemon work or escaped process groups. Implemented for the inspection runner. |
+
+CLI unit tests supply explicit state instead of reading the operator's journal.
+This fixes test isolation without changing the CLI's exit-code policy. Decision
+inventory updates remain external study material; no selected-trade-offs file is
+added to this repository.

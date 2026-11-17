@@ -1,5 +1,10 @@
 # Phase 2 contract and verification
 
+Current status: A–C and the stopped-API revision are implemented. The corrective
+batch strengthens journal and subprocess handling. Live deployment is still
+unavailable; Batch D and Phase 3 reconciliation remain pending. Earlier sections
+are historical batch records; later corrections explicitly supersede them.
+
 ## Batch A: command interface (historical acceptance record)
 
 Batch A implements argument parsing and input validation only. It does not
@@ -110,7 +115,7 @@ unimplemented deployment/status commands returning exit 3.
 Append later batch evidence here; do not mark planned checks as completed.
 
 
-## Batch B: read-only inspection
+## Batch B: read-only inspection (historical acceptance record)
 
 Batch B adds `preflight` and implements container observation through `status`.
 The historical Batch A status exit code above no longer describes this build.
@@ -118,14 +123,14 @@ The historical Batch A status exit code above no longer describes this build.
 Docker. No deployment, image pull/build, initialization, cleanup, rollback,
 operation-state writing or HTTP check is implemented by Batch B.
 
-| Command | Current behavior |
+| Command | Batch B behavior |
 |---|---|
 | `python -m toolkit status` | Lists observed project service states and image IDs. Exit 0 means inspection completed, not that the application is healthy. An empty project is explicitly reported. |
 | `python -m toolkit preflight --image sdt-demo-api:phase1 --release demo-v1` | Checks the current demo resources and resolves the local candidate image. Exit 0 means this read-only snapshot passed. |
 | `python -m toolkit deploy --image sdt-demo-api:phase1 --release demo-v1` | Remains unavailable; exit 3. |
 
 Inspection refusal or Docker failure returns 4. Invalid command/input returns 2.
-Status does not require valid Compose configuration, an .env file, or future
+At Batch B, status did not require valid Compose configuration, an .env file, or
 operation state; it can report stopped containers. It performs no ownership or
 HTTP acceptance check. An unknown service/metadata shape causes refusal rather
 than an invented result.
@@ -298,7 +303,8 @@ anything. Once the result is known, the caller can record `succeeded` or `failed
 Only success updates the last successful release. If replacement or verification
 is interrupted and the outcome is uncertain, leave the record pending. A pending
 or invalid snapshot blocks a new operation session. A missing snapshot with
-archives also blocks a new session. Deleting the entire local journal can erase
+archives also blocks a new session. The corrective batch below also detects a
+missing first snapshot when its initialization marker remains. Deleting the entire local journal can erase
 that evidence. Reconciliation belongs to Phase 3.
 
 `status` reads the journal without taking the mutation lock and separately
@@ -355,3 +361,75 @@ Stopped-API acceptance was exercised using test fixtures. A live
 stopped-API exercise and deployment integration remain pending.
 This revision supersedes the earlier blanket running-API prerequisite
 described in the Batch B record.
+
+## Corrective batch after 7397feb
+
+This batch changes inspection cleanup, journal primitives, tests and documentation.
+It does not start containers, implement deployment, or implement reconciliation.
+
+### Journal initialization and upgrades
+
+`initialized.json` contains exactly `{"version": 1, "purpose": "operation-journal"}`.
+Under the mutation lock, `begin` atomically writes and synchronizes the marker
+before writing pending intent. It does not return an operation ID until the
+pending record has been saved. A marker or snapshot write failure aborts begin.
+A missing snapshot with a marker or archive is uncertain and blocks mutation.
+Malformed, unsupported or symlink markers are refused without overwriting them.
+
+A session that never begins an operation does not create a marker. Read-only
+status does not create, repair or migrate state. Valid legacy snapshots without
+markers remain readable; a completed legacy snapshot receives a marker before
+its next operation begins. Pending legacy state still blocks mutations.
+A read racing with first initialization may conservatively report uncertainty.
+
+Partial initialization is not automatically repaired. Missing-marker legacy
+compatibility and complete local deletion remain limitations; the marker is
+neither backup storage nor tamper-proof evidence.
+
+### Subprocess cleanup and timeout contract
+
+Inspection commands start a new process session. Cleanup sends SIGKILL to the
+local process group, including ordinary descendants, then waits up to two seconds
+for the direct child. Cleanup failure is reported; timeout is not a daemon
+cancellation guarantee. The cleanup budget is separate from command timeout.
+A descendant that escapes into another session is outside this mechanism.
+
+For Batch D, a deployment-command timeout must preserve pending intent and return
+uncertainty (exit 6), unless a required recording failure takes precedence (7).
+Attempt bounded read-only observations with a separate, explicit budget. Report
+observed facts but do not convert them into a completed deployment record.
+No automatic retry or rollback follows an uncertain timeout. Phase 3 reconciliation
+will resolve the pending operation before further mutation. This policy is approved,
+but its live deployment implementation and tests remain pending.
+
+### Verification
+
+The suite exercises first-snapshot loss, initialization interruption, marker
+validation, synchronization failure, legacy upgrade/refusal, CLI state isolation,
+uncertainty precedence, and child-process cleanup. Test operations use temporary
+directories and fake Docker executables; they do not change the demo's resources.
+Owner-side verification and the live stopped-API exercise passed; see the
+owner verification record below.
+Assistant-side verification on 17 November 2026: all 94 test methods passed
+normally and with `-O`, with warnings treated as errors, using Python 3.12.14.
+`pip check` and `git diff --check` passed. This is not an owner-side Python 3.14
+result, a live Docker result, or proof of power-loss durability.
+
+
+### Corrective batch owner verification — passed
+
+All 94 tests passed normally and under Python optimization, with warnings
+treated as errors. `pip check` reported no broken requirements.
+`git diff --check` passed.
+
+Live status observed the API, database and proxy running and reported no
+recorded operations. Running-stack preflight passed; the candidate and current
+API image IDs matched. Smoke checks passed directly and through NGINX.
+
+The controlled exercise stopped the API, and live preflight accepted the
+stopped, owned container. API startup then completed, both smoke-check paths
+passed again, and final preflight observed the API running.
+
+These results verify stopped-API preflight acceptance and subsequent service
+recovery. They do not establish deployment of a different image, rollback,
+live deployment interruption handling, or power-loss durability.
