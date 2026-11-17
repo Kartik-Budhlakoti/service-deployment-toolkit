@@ -1,0 +1,360 @@
+from contextlib import redirect_stderr, redirect_stdout
+import io
+import json
+import os
+from pathlib import Path
+import subprocess
+import sys
+import tempfile
+import unittest
+from unittest.mock import patch
+
+from toolkit.cli import main
+from toolkit.locking import LockBusy
+from toolkit.state import RecordError, StateUncertain, operation_session, read_state, state_directory
+
+
+IMAGE = "sha256:" + "a" * 64
+NEXT_IMAGE = "sha256:" + "b" * 64
+
+
+class OperationTests(unittest.TestCase):
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name)
+        self.directory = state_directory(self.root)
+
+    def run_child(self, code):
+        return subprocess.run(
+            [sys.executable, "-c", code, str(self.root)],
+            capture_output=True, text=True, timeout=10,
+        )
+
+    def test_fresh_read_creates_no_state(self):
+        self.assertIsNone(read_state(self.root)["latest"])
+        self.assertFalse(self.directory.parent.exists())
+
+    def test_another_process_cannot_take_the_lock(self):
+        with operation_session(self.root):
+            result = self.run_child(
+                "import sys\n"
+                "from toolkit.locking import LockBusy\n"
+                "from toolkit.state import operation_session\n"
+                "try:\n"
+                "    with operation_session(sys.argv[1]):\n"
+                "        sys.exit(2)\n"
+                "except LockBusy:\n"
+                "    sys.exit(5)\n"
+            )
+        self.assertEqual(result.returncode, 5, result.stderr)
+        with operation_session(self.root):
+            pass
+
+    def test_abrupt_exit_leaves_pending_and_releases_lock(self):
+        result = self.run_child(
+            "import sys, os\n"
+            "from toolkit.state import operation_session\n"
+            "with operation_session(sys.argv[1]) as journal:\n"
+            f"    journal.begin({IMAGE!r}, 'demo-v1')\n"
+            "    os._exit(19)\n"
+        )
+        self.assertEqual(result.returncode, 19, result.stderr)
+        self.assertEqual(read_state(self.root)["latest"]["status"], "pending")
+        with self.assertRaises(StateUncertain), operation_session(self.root):
+            self.fail("An unfinished operation must block the session")
+
+    def test_failure_preserves_last_success_and_archives_previous_record(self):
+        with operation_session(self.root) as journal:
+            first = journal.begin(IMAGE, "demo-v1")
+            journal.finish(first, "succeeded")
+        with operation_session(self.root) as journal:
+            second = journal.begin(NEXT_IMAGE, "demo-v2")
+            journal.finish(second, "failed")
+        state = read_state(self.root)
+        self.assertEqual(state["latest"]["status"], "failed")
+        self.assertEqual(state["last_success"]["image_id"], IMAGE)
+        previous = json.loads((self.directory / f"operation-{first}.json").read_text())
+        self.assertEqual(previous, state["last_success"])
+
+    def test_first_failure_does_not_create_recovery_target(self):
+        with operation_session(self.root) as journal:
+            operation = journal.begin(IMAGE, "demo-v1")
+            journal.finish(operation, "failed")
+        self.assertIsNone(read_state(self.root)["last_success"])
+
+    def test_wrong_operation_id_leaves_pending(self):
+        with operation_session(self.root) as journal:
+            operation = journal.begin(IMAGE, "demo-v1")
+            with self.assertRaises(StateUncertain):
+                journal.finish("wrong", "succeeded")
+            self.assertEqual(read_state(self.root)["latest"]["id"], operation)
+            self.assertEqual(read_state(self.root)["latest"]["status"], "pending")
+
+    def test_invalid_file_refuses_mutation_and_remains_intact(self):
+        self.directory.mkdir(parents=True)
+        state = self.directory / "state.json"
+        for data in (b"{", b'{"version": 2, "latest": null, "last_success": null}', b"x" * 8193):
+            with self.subTest(size=len(data)):
+                state.write_bytes(data)
+                with self.assertRaises(StateUncertain), operation_session(self.root):
+                    self.fail("Invalid state must block the session")
+                self.assertEqual(state.read_bytes(), data)
+
+    def test_missing_snapshot_with_archive_is_uncertain(self):
+        self.directory.mkdir(parents=True)
+        (self.directory / "operation-old.json").touch()
+        with self.assertRaises(StateUncertain):
+            read_state(self.root)
+
+    def test_failed_atomic_replace_preserves_previous_snapshot(self):
+        with operation_session(self.root) as journal:
+            operation = journal.begin(IMAGE, "demo-v1")
+            previous = (self.directory / "state.json").read_bytes()
+            with patch("toolkit.state.os.replace", side_effect=OSError):
+                with self.assertRaises(RecordError):
+                    journal.finish(operation, "succeeded")
+            self.assertEqual((self.directory / "state.json").read_bytes(), previous)
+            self.assertEqual(list(self.directory.glob(".write-*")), [])
+            with self.assertRaises(RuntimeError):
+                journal.finish(operation, "succeeded")
+
+    def test_failed_initial_record_does_not_return_operation_id(self):
+        with operation_session(self.root) as journal:
+            with patch("toolkit.state.os.replace", side_effect=OSError):
+                with self.assertRaises(RecordError):
+                    journal.begin(IMAGE, "demo-v1")
+        self.assertIsNone(read_state(self.root)["latest"])
+
+    def test_state_symlink_refused(self):
+        self.directory.mkdir(parents=True)
+        external = self.root / "external.json"
+        external.write_text("untouched")
+        (self.directory / "state.json").symlink_to(external)
+        with self.assertRaises(StateUncertain):
+            read_state(self.root)
+        self.assertEqual(external.read_text(), "untouched")
+
+    def test_status_remains_available_with_unfinished_state(self):
+        with operation_session(self.root) as journal:
+            journal.begin(IMAGE, "demo-v1")
+        stdout, stderr = io.StringIO(), io.StringIO()
+        rows = [{"service": "api", "state": "running", "image_id": IMAGE}]
+        with patch("toolkit.state.Path.cwd", return_value=self.root), patch(
+                "toolkit.cli.inspect_status", return_value=rows
+        ), redirect_stdout(stdout), redirect_stderr(stderr):
+            self.assertEqual(main(["status"]), 6)
+        self.assertIn("pending", stdout.getvalue())
+        self.assertIn("api: running", stdout.getvalue())
+        self.assertIn("STATE UNCERTAIN", stderr.getvalue())
+
+    def test_session_cannot_write_after_unlock(self):
+        with operation_session(self.root) as journal:
+            pass
+        with self.assertRaises(RuntimeError):
+            journal.begin(IMAGE, "demo-v1")
+
+
+class MarkerTests(unittest.TestCase):
+    setUp = OperationTests.setUp
+    run_child = OperationTests.run_child
+
+
+    def begin(self):
+        with operation_session(self.root) as journal:
+            return journal.begin(IMAGE, "demo-v1")
+
+    def test_first_snapshot_loss_is_uncertain(self):
+        self.begin()
+        self.assertTrue((self.directory / "initialized.json").is_file())
+        self.assertEqual(list(self.directory.glob("operation-*.json")), [])
+        (self.directory / "state.json").unlink()
+        with self.assertRaises(StateUncertain):
+            read_state(self.root)
+        with self.assertRaises(StateUncertain), operation_session(self.root):
+            self.fail("Missing snapshot must block mutation")
+
+    def test_session_without_begin_does_not_initialize_journal(self):
+        with operation_session(self.root):
+            pass
+        self.assertFalse((self.directory / "initialized.json").exists())
+        self.assertIsNone(read_state(self.root)["latest"])
+
+    def test_marker_is_durable_before_snapshot_write(self):
+        from toolkit.state import _write_json
+        def write(path, value):
+            if path.name == "state.json":
+                self.assertEqual(json.loads((self.directory / "initialized.json").read_text()),
+                                 {"version": 1, "purpose": "operation-journal"})
+                raise RecordError("injected snapshot failure")
+            return _write_json(path, value)
+        with operation_session(self.root) as journal:
+            with patch("toolkit.state._write_json", side_effect=write):
+                with self.assertRaises(RecordError):
+                    journal.begin(IMAGE, "demo-v1")
+            with self.assertRaises(RuntimeError):
+                journal.begin(IMAGE, "demo-v1")
+        with self.assertRaises(StateUncertain):
+            read_state(self.root)
+
+    def test_abrupt_exit_between_marker_and_snapshot_blocks_next_session(self):
+        result = self.run_child(
+            "import sys, os\n"
+            "from unittest.mock import patch\n"
+            "from toolkit.state import operation_session, _write_json\n"
+            "def write(path, value):\n"
+            "    if path.name == 'state.json': os._exit(23)\n"
+            "    return _write_json(path, value)\n"
+            "with operation_session(sys.argv[1]) as journal:\n"
+            "    with patch('toolkit.state._write_json', side_effect=write):\n"
+            f"        journal.begin({IMAGE!r}, 'demo-v1')\n"
+        )
+        self.assertEqual(result.returncode, 23, result.stderr)
+        with self.assertRaises(StateUncertain), operation_session(self.root):
+            self.fail("Interrupted initialization must block")
+
+    def test_marker_sync_failure_prevents_snapshot(self):
+        with operation_session(self.root) as journal:
+            with patch("toolkit.state._sync_directory", side_effect=OSError):
+                with self.assertRaises(RecordError):
+                    journal.begin(IMAGE, "demo-v1")
+        self.assertFalse((self.directory / "state.json").exists())
+        with self.assertRaises(StateUncertain):
+            read_state(self.root)
+
+    def test_invalid_markers_are_preserved_and_refused(self):
+        self.directory.mkdir(parents=True)
+        marker = self.directory / "initialized.json"
+        for data in (b"{", b"[]", b"x" * 8193,
+                     b'{"version":true,"purpose":"operation-journal"}',
+                     b'{"version":2,"purpose":"operation-journal"}'):
+            with self.subTest(data=data[:50]):
+                marker.write_bytes(data)
+                with self.assertRaises(StateUncertain):
+                    read_state(self.root)
+                with self.assertRaises(StateUncertain), operation_session(self.root):
+                    self.fail("Invalid marker must block")
+                self.assertEqual(marker.read_bytes(), data)
+
+    def test_marker_symlink_is_refused(self):
+        self.directory.mkdir(parents=True)
+        target = self.root / "target"
+        target.write_text('{"version":1,"purpose":"operation-journal"}')
+        (self.directory / "initialized.json").symlink_to(target)
+        with self.assertRaises(StateUncertain):
+            read_state(self.root)
+
+    def test_completed_legacy_snapshot_upgrades_before_next_operation(self):
+        with operation_session(self.root) as journal:
+            first = journal.begin(IMAGE, "demo-v1")
+            journal.finish(first, "succeeded")
+        marker = self.directory / "initialized.json"
+        marker.unlink()  # Reproduce the old format without an initialization marker.
+        before = (self.directory / "state.json").read_bytes()
+        self.assertEqual(read_state(self.root)["last_success"]["id"], first)
+        self.assertFalse(marker.exists())  # Reads must not migrate anything.
+        self.assertEqual((self.directory / "state.json").read_bytes(), before)
+        with operation_session(self.root) as journal:
+            second = journal.begin(NEXT_IMAGE, "demo-v2")
+            journal.finish(second, "failed")
+        self.assertTrue(marker.is_file())
+        self.assertEqual(read_state(self.root)["last_success"]["id"], first)
+
+    def test_pending_legacy_snapshot_still_blocks(self):
+        self.begin()
+        (self.directory / "initialized.json").unlink()
+        with self.assertRaises(StateUncertain), operation_session(self.root):
+            self.fail("Legacy pending records must not be adopted as success")
+        self.assertFalse((self.directory / "initialized.json").exists())
+
+    def test_invalid_marker_blocks_even_with_valid_snapshot(self):
+        self.begin()
+        (self.directory / "initialized.json").write_text("invalid")
+        with self.assertRaises(StateUncertain):
+            read_state(self.root)
+
+    def test_status_uncertainty_takes_priority_over_docker_failure(self):
+        from toolkit.docker import InspectionError
+        self.begin()
+        with patch("toolkit.state.Path.cwd", return_value=self.root), patch(
+            "toolkit.cli.inspect_status", side_effect=InspectionError("unavailable")
+        ) as inspection, redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+            self.assertEqual(main(["status"]), 6)
+        inspection.assert_called_once()
+
+
+    def test_marker_file_sync_failure_prevents_pending_record(self):
+        with operation_session(self.root) as journal:
+            with patch("toolkit.state.os.fsync", side_effect=OSError):
+                with self.assertRaises(RecordError):
+                    journal.begin(IMAGE, "demo-v1")
+        self.assertFalse((self.directory / "state.json").exists())
+        self.assertFalse((self.directory / "initialized.json").exists())
+        self.assertEqual(list(self.directory.glob(".write-*")), [])
+        self.assertIsNone(read_state(self.root)["latest"])
+
+    def test_failed_legacy_upgrade_preserves_completed_snapshot(self):
+        with operation_session(self.root) as journal:
+            first = journal.begin(IMAGE, "demo-v1")
+            journal.finish(first, "succeeded")
+        (self.directory / "initialized.json").unlink()
+        before = (self.directory / "state.json").read_bytes()
+        with operation_session(self.root) as journal:
+            with patch("toolkit.state.os.replace", side_effect=OSError):
+                with self.assertRaises(RecordError):
+                    journal.begin(NEXT_IMAGE, "demo-v2")
+        self.assertEqual((self.directory / "state.json").read_bytes(), before)
+        self.assertEqual(list(self.directory.glob("operation-*.json")), [])
+        self.assertEqual(read_state(self.root)["last_success"]["id"], first)
+
+
+class DeploymentRecordTests(unittest.TestCase):
+    setUp = OperationTests.setUp
+
+    def test_action_and_results_survive_round_trip(self):
+        from toolkit.state import CHECK_NAMES
+        with operation_session(self.root) as journal:
+            operation = journal.begin(IMAGE, 'demo-v1', action='verify-only')
+            journal.finish(operation, 'succeeded', checks=dict.fromkeys(CHECK_NAMES, True))
+        state = read_state(self.root)
+        self.assertEqual(state['version'], 2)
+        self.assertEqual(state['latest']['action'], 'verify-only')
+        self.assertEqual(state['last_success'], state['latest'])
+
+    def test_legacy_success_retained_by_new_failed_operation(self):
+        from toolkit.state import CHECK_NAMES
+        with operation_session(self.root) as journal:
+            old = journal.begin(IMAGE, 'demo-v1')
+            journal.finish(old, 'succeeded')
+        with operation_session(self.root) as journal:
+            new = journal.begin(NEXT_IMAGE, 'demo-v2', action='replace')
+            journal.finish(new, 'failed', checks=dict.fromkeys(CHECK_NAMES, False))
+        self.assertEqual(read_state(self.root)['last_success']['id'], old)
+
+    def test_invalid_action_is_refused_before_marker(self):
+        with operation_session(self.root) as journal:
+            with self.assertRaises(ValueError):
+                journal.begin(IMAGE, 'demo-v1', action='rollback')
+        self.assertIsNone(read_state(self.root)['latest'])
+
+    def test_success_with_failed_checks_is_refused(self):
+        from toolkit.state import CHECK_NAMES
+        with operation_session(self.root) as journal:
+            op = journal.begin(IMAGE, 'demo-v1', action='replace')
+            with self.assertRaises(ValueError):
+                journal.finish(op, 'succeeded', checks=dict.fromkeys(CHECK_NAMES, False))
+        self.assertEqual(read_state(self.root)['latest']['status'], 'pending')
+
+    def test_incomplete_check_map_is_refused(self):
+        with operation_session(self.root) as journal:
+            op = journal.begin(IMAGE, 'demo-v1', action='replace')
+            with self.assertRaises(ValueError):
+                journal.finish(op, 'failed', checks={'container': False})
+        self.assertEqual(read_state(self.root)['latest']['status'], 'pending')
+
+    def test_new_format_requires_marker(self):
+        with operation_session(self.root) as journal:
+            journal.begin(IMAGE, 'demo-v1', action='replace')
+        (self.directory / 'initialized.json').unlink()
+        with self.assertRaises(StateUncertain):
+            read_state(self.root)

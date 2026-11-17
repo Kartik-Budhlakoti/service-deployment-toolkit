@@ -1,13 +1,18 @@
 # Service Deployment Toolkit
 
 A local project for checking containerized releases and recovering from failed
-deployments. The deployment and recovery CLI is still planned. The working
-foundation is a small FastAPI catalogue, PostgreSQL, and NGINX.
+deployments. The CLI validates inputs, inspects resources, and deploys or verifies
+a local API image while recording the outcome. Recovery remains future work.
+The demonstration workload is a small FastAPI catalogue, PostgreSQL, and NGINX.
 
 ## Current status
 
-Phase 1 implementation and local checks are complete; documentation and PR
-review are in progress. There is no automated deployment or rollback command yet.
+Phase 1 is merged. Phase 2 deployment is implemented and locally verified at
+`fa8aaf1`; the Phase 2 branch is undergoing closure and PR review. All 153 tests
+passed in normal and optimized modes on the owner's Python 3.14.10 environment.
+Live exercises covered verification-only, stopped-API replacement, a different
+candidate image, and explicit redeployment of the original image. No rollback
+or reconciliation command exists yet.
 
 The demo has been exercised on EndeavourOS x86_64 with Python 3.14.10,
 Docker Engine 29.9.3, and Compose 5.7.1. These are tested versions, not a claim
@@ -99,12 +104,14 @@ To resume the existing installation using its locally available images and
 unchanged configuration:
 
 ```bash
-docker compose up -d --no-build --pull never --wait --wait-timeout 120 db api nginx &&
+docker compose start --wait --wait-timeout 120 db api nginx &&
 python tests/smoke.py
 ```
 
-If an image is missing, investigate before rebuilding or pulling it. Resume is
-not the procedure for deploying a changed application.
+These resume commands start existing containers; they do not recreate missing
+ones. Investigate missing containers or images before rebuilding. After toolkit
+deployment, plain `docker compose up` can reapply the base Phase 1 image, bypassing
+toolkit records. Use the toolkit for release changes; do not use resume as deployment.
 
 Keep the existing `.env` and named volume. Do not reseed to conceal a failed
 persistence check. Changing `POSTGRES_PASSWORD` in `.env` does not update an
@@ -130,8 +137,10 @@ PYTHONPATH=demo python -W error -m unittest discover -s tests -p 'test_*.py' -v 
 PYTHONPATH=demo python -O -W error -m unittest discover -s tests -p 'test_*.py' -v
 ```
 
-There are nine unit tests, run in two modes. They use simulated database or HTTP
-behavior; they do not replace the live smoke check or manual integration exercises.
+The suite includes demo, CLI, preflight, subprocess and journal tests. It uses
+simulated database/Docker responses plus real temporary files and child processes.
+It does not replace live smoke checks or Docker integration exercises. Historical
+counts and current verification results are in the Phase 2 evidence document.
 
 `demo/requirements.txt` records direct runtime dependencies;
 `demo/requirements.lock` pins the observed runtime set used by Docker.
@@ -148,18 +157,81 @@ digest; dependency and image updates require deliberate review and retesting.
 - Fixture persistence across database-container replacement without reseeding.
 - Refusal to overwrite conflicting fixture data, followed by restoration.
 - Locked-image rebuild, running-image identity, and all 16 runtime package pins.
-- Fresh development-lock installation with nine passing tests in both modes.
+- Phase 1 fresh development-lock installation with nine passing tests in both modes.
+- Phase 2's 153 tests passed in both modes with no reported cleanup warnings.
+- Verification-only left the API container unchanged; a wrong expected release
+  failed while preserving the previous successful record.
+- Stopped-API and changed-image replacement passed with database and NGINX
+  container IDs unchanged; explicit redeployment returned the demo to v1.
 
 These are local results, not CI results or a complete clean-machine installation
 claim. Detailed evidence boundaries and remaining gaps are recorded in
 [Known issues and limitations](docs/KNOWN-ISSUES.md).
 
+## Current toolkit commands
+
+Run from this checkout's root. Inspection supports the default local Docker
+socket at `/var/run/docker.sock`; Desktop, rootless and remote contexts are not
+supported by the toolkit. The demo setup above is still required before preflight.
+
+```bash
+python -m toolkit --help
+python -m toolkit validate --image sdt-demo-api:phase1 --release demo-v1
+python -m toolkit status
+python -m toolkit preflight --image sdt-demo-api:phase1 --release demo-v1
+```
+
+Validation checks input shape only. Status reports local records and observed
+container states, not application health. Preflight checks supported ownership,
+resources and local image identity; it neither deploys nor verifies HTTP behavior.
+An owned stopped API is permitted, but the database and proxy must be running.
+`deploy` is now implemented. It acquires the lock, checks resources, records
+pending intent and either verifies the matching running image or replaces only
+the API. A matching stopped API still requires replacement.
+
+Deployment uses a per-checkout lock and `.runtime/toolkit/`. A pending operation
+blocks another deployment; read-only status remains available. Once initialized, a missing snapshot is refused if
+its initialization marker remains. Never delete operation state to bypass a
+refusal. Read-only commands do not create or upgrade journals.
+
+## Deploy a local image
+
+Build the intended image separately. The toolkit never pulls or builds it, seeds
+the database, or requests dependency replacement. Candidates must preserve the
+demo image user `10001:10001` and the existing API contract.
+
+```bash
+python -m toolkit deploy --image sdt-demo-api:phase1 --release demo-v1
+```
+
+The current running Phase 1 image normally takes the `verify-only` path. This
+still records a real verification operation. When replacement is required, a
+strict image-only override is written to `.runtime/toolkit/compose-image.json`.
+The base Compose file and working image tag are not edited.
+
+Success requires container state, liveness, expected image/release, direct
+catalogue and proxy catalogue checks in one accepted attempt. The journal records
+`action` and five check results. Failure returns nonzero; no rollback occurs.
+After an uncertain command result, the tool attempts up to ten seconds of
+read-only verification observations and retains pending intent even if they pass.
+Do not delete that record to retry. Reconciliation remains Phase 3 work.
+
+See [Phase 2 verification](docs/PHASE-2-VERIFICATION.md) for timing, exit codes,
+configuration boundaries, and the distinction between tests and live acceptance.
+
+## Reproduce Phase 2 acceptance
+
+The manual driver is [scripts/phase2-acceptance.py](scripts/phase2-acceptance.py).
+Its three stages were run successfully by the owner before the driver was added
+to the repository unchanged. See the [reproduction instructions](docs/PHASE-2-VERIFICATION.md#reproduce-the-live-exercises)
+for prerequisites, commands and expected effects. These exercises deliberately
+replace the demo API; they are not part of automatic unit-test discovery.
+
 ## Next phases and boundaries
 
-Next comes explicit image selection, ownership checks, deployment locking,
-operation records, and five deployment verification check types. Manual rollback
-will be the default; automatic recovery will require opt-in and compatibility
-checks. None of these toolkit operations is implemented yet.
+Phase 2 is ready for final PR review after the closure documentation is applied.
+Phase 3 adds manual rollback and reconciliation; automatic recovery will require
+opt-in and compatibility checks. Recovery and reconciliation are not implemented.
 
 The baseline targets one local stack. It excludes Kubernetes, paid hosting,
 AI classification, database rollback, high availability, and zero-downtime
@@ -168,6 +240,7 @@ guarantees. PostgreSQL persistence is not a backup.
 - [Architecture](docs/ARCHITECTURE.md)
 - [Decisions](docs/DECISIONS.md)
 - [Known issues and limitations](docs/KNOWN-ISSUES.md)
+- [Phase 2 contract and verification](docs/PHASE-2-VERIFICATION.md)
 
 ## License
 

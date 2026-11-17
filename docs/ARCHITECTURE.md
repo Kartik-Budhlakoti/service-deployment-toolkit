@@ -1,7 +1,9 @@
 # Architecture
 
-Status: Phase 1 demo implemented and checked locally; documentation and PR
-review are in progress. The deployment and recovery toolkit is not implemented.
+Status: Phase 1 merged. Phase 2 integrates deployment, verification, inspection
+and journal/lock components. At `fa8aaf1`, 153 tests passed on the owner's machine
+in both modes, and all three planned live acceptance stages passed. Phase 2 PR
+closure is in progress. Recovery and reconciliation remain Phase 3 work.
 
 ## Purpose and scope
 
@@ -22,7 +24,7 @@ and medical repositories and their Docker resources remain outside its control.
 | Database | PostgreSQL 18 with a dedicated named volume |
 | Proxy | NGINX forwarding to the Compose service `api` |
 | Initialization | Explicit one-off `init` service using the API image |
-| Unit tests | Four API failure tests and five smoke-checker regression tests |
+| Demo unit tests | Four API failure tests and five smoke-checker regression tests |
 | Live checker | `tests/smoke.py`, run on the host |
 
 The Compose project is `sdt-demo`; its database volume is
@@ -88,23 +90,26 @@ at both addresses. Normal mode expects exactly the three fixture records;
 HTTP 503. It uses explicit comparisons, including under Python optimization.
 It has a 12-second per-request socket timeout and a response-size limit, but
 no retries or overall operation deadline. This is a small test helper, not the
-planned deployment verifier.
+deployment verifier in `toolkit/checks.py`.
 
 The image installs 16 pinned runtime packages from `demo/requirements.lock`.
 A separate 19-package development lock includes the test client and its
 additional dependencies. Base-image references are digest-pinned. The working
 application tag `sdt-demo-api:phase1` remains mutable.
 
-## Planned deployment verification
+## Deployment verification
 
-The following describes requirements for Phase 2, not current capabilities.
+Batch D implements the five check groups below and integrates preflight and
+operation recording under the mutation lock. Success is a point-in-time result;
+real Docker acceptance remains separate from simulated tests.
 
-Preflight checks must validate configuration, Docker access, image availability,
-resource ownership, deployment locking, and recorded operation state before
-replacing the application. The selected image must resolve to an immutable
-identifier; a mutable tag alone is insufficient.
+The deployment workflow checks configuration, Docker access, image availability,
+resource ownership and recorded operation state while holding its mutation lock.
+The standalone `preflight` command only inspects resources and candidate identity;
+it does not acquire that lock, check the journal or verify HTTP responses.
+The selected image must resolve to an immutable identifier; a mutable tag alone is insufficient.
 
-Five post-deployment check types are planned:
+Five verification groups are implemented:
 
 1. Application container state during the verification window.
 2. API liveness.
@@ -112,7 +117,10 @@ Five post-deployment check types are planned:
 4. A database-backed catalogue response with expected synthetic content.
 5. The catalogue response through NGINX.
 
-The verifier must have explicit deadlines, request timeouts, and bounded retries.
+The verifier shares a monotonic deadline across attempts, caps each request and
+Docker query to the remaining budget, and bounds response bodies. HTTP probes
+run in child processes; process cleanup has a separate two-second wait budget.
+It retries until success or deadline, without accumulating passes across attempts.
 Readiness assists startup and diagnosis; it does not replace catalogue checks.
 Passing the checks establishes only the tested conditions, not complete
 correctness, security, or future availability.
@@ -135,7 +143,7 @@ availability. Automatic recovery is attempted at most once per failed deployment
 and verified separately. A failed deployment returns a nonzero exit code even
 if recovery succeeds. A failed first deployment has no previous release to restore.
 
-## Planned state, interruption handling, and reporting
+## State, interruption handling, and reporting
 
 Mutating toolkit operations must share a lock. This cannot prevent external
 Docker commands. Operation progress must be recorded before replacement, and
@@ -143,16 +151,18 @@ a failed candidate must not overwrite the previous successful release reference.
 
 Incomplete operations, inconsistent state, or unreadable state require inspection
 before further mutations. Unknown state must not be treated as success. Read-only
-status and diagnosis should remain available. The state format and reconciliation
-procedure must be specified before the dependent implementation is accepted.
+status and diagnosis should remain available. The current JSON state format is
+implemented and integrated with deployment; reconciliation remains Phase 3 work.
 
 Each operation must attempt a small local JSON record and print a concise result.
 Deployment and recovery outcomes are separate. Failure evidence must be bounded,
 distinguish observations from suspected causes, and avoid secret values, complete
 environment dumps, and unfiltered logs. Failure to save a report must be disclosed.
 
-Current `.runtime` files are local test evidence, not an implemented release-state
-store or tamper-proof audit trail.
+`.runtime/toolkit/` contains operation snapshots and archives when deployment
+operations are recorded. Phase 1 test evidence occupies a separate directory. These
+records are not a tamper-proof audit trail. See the Phase 2 contract for the
+initialization marker, legacy-journal handling and partial-loss limitations.
 
 ## Resource and security boundaries
 
@@ -166,7 +176,7 @@ Already configured for the demo:
   build context. This does not detect secrets placed in other files or remove
   a secret that was already tracked.
 
-Required for the future toolkit:
+Toolkit boundaries (targeted checks are performed under the deployment lock):
 
 - Operate only on the configured local Docker environment.
 - Verify ownership and refuse silent adoption of conflicting resources.
@@ -202,3 +212,38 @@ are recorded in [Known issues and limitations](KNOWN-ISSUES.md).
 Kubernetes, Terraform, Jenkins, AI classification, public hosting, application
 authentication, real health data, database migrations, database backup and restore,
 database rollback, high availability, zero-downtime guarantees, and a web dashboard.
+
+## Approved timeout policy
+
+A deployment-command timeout or other unconfirmed command result starts as an
+uncertain outcome, not a confirmed application failure. Batch D cleans up local
+command processes as far as possible, keeps pending intent, and attempts up to
+ten seconds of read-only observations. Observed image
+identity and HTTP results must not silently finalize an uncertain operation.
+There is no automatic retry or rollback on timeout. Phase 3 reconciliation must
+resolve uncertainty before another mutation. Docker daemon work and children
+that deliberately escape the local process group are outside cleanup guarantees.
+
+Inspection, deployment and HTTP-probe commands use isolated process groups and
+bounded cleanup.
+This is local subprocess handling, not evidence of completed Docker mutations.
+
+## Batch D replacement boundary
+
+The generated override changes only `services.api.image`, using the resolved
+full local image ID. Compose receives explicit project/base/override arguments
+and `up -d --no-deps --no-build --pull never --force-recreate api`.
+Ownership accepts the exact base-file label or, for the API only, the exact
+base-plus-toolkit-override label with an image matching the validated override.
+Foreign override paths and unexpected override fields are refused.
+
+Two resource snapshots precede pending intent; the second uses the resolved ID.
+Only a matching running image takes the verify-only path. The verifier brackets
+HTTP checks with container observations and checks that dependency container IDs
+have not changed. Brief failures between samples may still escape observation.
+
+Configuration file fingerprints stay in memory and are checked during the
+operation. They cover compose.yaml, .env and the NGINX bind-mounted configuration;
+they are not persisted secret hashes or a general runtime drift detector. External
+Docker commands and file edits can still race with the toolkit. Phase 3 must
+implement the separate cross-release compatibility checks for automatic recovery.

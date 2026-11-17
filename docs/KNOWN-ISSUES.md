@@ -1,9 +1,11 @@
 # Known Issues and Limitations
 
-Status: Phase 1 demo implemented and checked locally; documentation and PR review
-are in progress. The deployment and recovery toolkit is not implemented yet.
+Status: Phase 1 merged. Phase 2 deployment at `fa8aaf1` passed the owner's 153-test
+suite in both modes and all three planned live acceptance stages. Phase 2 PR
+closure is in progress. Rollback, reconciliation, detailed diagnostics and CI
+remain future work. Live timeout/interruption recovery is not established.
 
-## Verification record
+## Phase 1 verification record (historical)
 
 The following summarizes local terminal runs reviewed during Phase 1, including
 the locked rebuild and fresh development-environment checks on 16 November 2026.
@@ -59,12 +61,29 @@ Resolution: development requirements use `httpx2==2.15.1` rather than the old
 `httpx` dependency. Nine tests passed with warnings treated as errors in normal
 and optimized modes, including a fresh development-lock installation.
 
+### F04: default startup fields caused a false deployment refusal
+
+The initial Batch D allowlist rejected resolved API `command` and `entrypoint`
+fields even when null. The owner observed a refusal before any operation was
+recorded. Fix 1 accepts absent/null defaults and still rejects every non-null
+startup override. The owner confirmed both defaults and passed live acceptance.
+Regression tests distinguish null from empty strings/lists and actual overrides.
+
+### F05: rejected HTTP responses were not explicitly closed
+
+The initial Batch D worker caught HTTPError without closing its response. The
+owner's Python 3.14.10 runs emitted cleanup ResourceWarnings for 302 and 503
+responses even though unittest reported OK. Fix 1 closes the error response;
+regression tests check closure. Both corrected owner test runs passed without
+the reported warnings. An OK line alone was insufficient evidence of clean tests.
+
 ## Current limitations and open verification gaps
 
-- No deployment CLI, rollback command, release-state store, operation lock,
-  ownership enforcement, structured operation reports, or CI workflow exists yet.
-- Current Compose commands can change resources; the project's intended ownership
-  boundaries are not yet enforced by toolkit code.
+- The CLI implements deployment with journal/lock integration and five verification
+  groups. The recorded live owner acceptance passed. Rollback, reconciliation, full
+  diagnostic reports and CI are not implemented.
+- Deployment repeats targeted ownership checks under its lock. Manual Compose
+  commands bypass these checks and can invalidate local operation history.
 - The demo targets one Linux host and one known workload. It has no authentication,
   real health data, high-availability behavior, or continuous self-healing.
 - Readiness checks table access, not complete fixture contents. The smoke checker
@@ -108,8 +127,9 @@ configuration fact, not a comprehensive container-security audit.
 - A previously successful release may fail under changed external conditions.
 - Persistent storage is not a backup. Database backup and restore are out of scope.
 - Automatic recovery will require explicitly supported compatibility conditions.
-- The planned lock will coordinate toolkit operations, not external Docker commands.
-- Local operation records will not be tamper-proof audit records.
+- The implemented per-checkout lock coordinates participating toolkit processes,
+  not external Docker commands or other checkouts.
+- Local operation records are not tamper-proof audit records.
 - Diagnostic observations will not always establish a root cause.
 - Trusted operators, configuration, and demo images are assumed; Docker access
   does not create a security sandbox.
@@ -123,3 +143,57 @@ and verification evidence. Label suspected defects as unconfirmed until supporte
 A core acceptance failure blocks its phase. It must not be relabeled as an
 acceptable limitation simply to finish. Passing the recorded checks is not
 proof that no defects remain.
+
+## Corrective batch findings after commit 7397feb
+
+- C01: Two CLI tests read real checkout state while mocking Docker. A pending
+  journal caused false test failures. They now supply explicit empty state;
+  separate integration tests exercise uncertain state and Docker failure together.
+- C02: Inspection timeout killed only the direct child. A descendant could keep
+  running. Commands now start in a new session; cleanup kills their process group
+  and bounds the direct-child wait. Tests cover timeout, exited parent and output
+  overflow. This does not cancel Docker daemon work or contain escaped sessions.
+- C03: Losing the first pending snapshot looked like first use because no archives
+  existed. A durable marker now precedes the first pending record. A remaining
+  marker without a snapshot blocks mutation. Interrupted initialization can also
+  leave this conservative refusal, even though no deployment was requested.
+- C04: Overview documents still described Phase 1-only behavior. Current status
+  is updated while earlier acceptance results retain their historical counts.
+
+The marker is not a backup. Removing both marker and snapshot before any archives
+exist, or deleting the whole journal, can still erase evidence. Valid old-format
+snapshots without markers are accepted for compatibility; missing-marker loss
+cannot be distinguished from that legacy format. The next begin adds the marker
+under the lock. Pending or invalid legacy snapshots remain blocked. Previously
+lost legacy history cannot be reconstructed by this update.
+
+The owner's corrective-batch tests and live stopped-API exercise passed.
+The results and their boundaries are recorded in
+[Phase 2 verification](PHASE-2-VERIFICATION.md).
+Do not interpret this patch as proof of live deployment interruption handling.
+
+## Batch D limitations
+
+- The baseline is trusted local operators and trusted demo images, not execution
+  of arbitrary third-party images in a security sandbox. Candidate UID/GID must
+  match the demo. Image contents and entrypoint behavior are not audited here.
+- Preflight observations do not lock Docker itself. External mutations may race
+  with image selection, replacement and verification. Container checks sample
+  states; no continuous-health or zero-downtime guarantee is made.
+- Command failures, including nonzero results after partial work, conservatively
+  retain pending intent. A healthy observation after timeout is not proof of a
+  settled operation. There is no safe reset/reconcile command in this phase.
+- Overall deployment time includes preflight commands, replacement, verification
+  and cleanup. The verification setting is not a total deployment timeout.
+- The command runner is Linux-specific (process groups and waitid). It cannot
+  cancel daemon work or children that deliberately escape the process group.
+- Current configuration checks cover selected demo settings and three files.
+  They do not prove all live environment/configuration matches Compose, detect
+  every edit-and-revert race, or support extra configuration fragments/hooks.
+- The generated override is retained. Plain Compose up can restore the base
+  image without toolkit recording; resume existing containers with start.
+- Records now include action and check results. Detailed observations after an
+  uncertain command are printed, not saved as a full diagnostic report. Refusals
+  before begin and read-only commands are not persistent deployment operations.
+- New version-2 snapshots require the initialization marker. Legacy version-1
+  records remain readable. This is local history, not durable backup storage.
