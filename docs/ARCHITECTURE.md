@@ -1,8 +1,9 @@
 # Architecture
 
-Status: Phase 1 merged. Phase 2 Batch D integrates deployment, verification,
-inspection and journal/lock components. Automated checks are available; owner-side
-live deployment acceptance is pending. Recovery and reconciliation remain Phase 3.
+Status: Phase 1 merged. Phase 2 integrates deployment, verification, inspection
+and journal/lock components. At `fa8aaf1`, 153 tests passed on the owner's machine
+in both modes, and all three planned live acceptance stages passed. Phase 2 PR
+closure is in progress. Recovery and reconciliation remain Phase 3 work.
 
 ## Purpose and scope
 
@@ -89,7 +90,7 @@ at both addresses. Normal mode expects exactly the three fixture records;
 HTTP 503. It uses explicit comparisons, including under Python optimization.
 It has a 12-second per-request socket timeout and a response-size limit, but
 no retries or overall operation deadline. This is a small test helper, not the
-planned deployment verifier.
+deployment verifier in `toolkit/checks.py`.
 
 The image installs 16 pinned runtime packages from `demo/requirements.lock`.
 A separate 19-package development lock includes the test client and its
@@ -102,12 +103,13 @@ Batch D implements the five check groups below and integrates preflight and
 operation recording under the mutation lock. Success is a point-in-time result;
 real Docker acceptance remains separate from simulated tests.
 
-Preflight checks must validate configuration, Docker access, image availability,
-resource ownership, deployment locking, and recorded operation state before
-replacing the application. The selected image must resolve to an immutable
-identifier; a mutable tag alone is insufficient.
+The deployment workflow checks configuration, Docker access, image availability,
+resource ownership and recorded operation state while holding its mutation lock.
+The standalone `preflight` command only inspects resources and candidate identity;
+it does not acquire that lock, check the journal or verify HTTP responses.
+The selected image must resolve to an immutable identifier; a mutable tag alone is insufficient.
 
-Five post-deployment check types are planned:
+Five verification groups are implemented:
 
 1. Application container state during the verification window.
 2. API liveness.
@@ -157,8 +159,8 @@ Deployment and recovery outcomes are separate. Failure evidence must be bounded,
 distinguish observations from suspected causes, and avoid secret values, complete
 environment dumps, and unfiltered logs. Failure to save a report must be disclosed.
 
-`.runtime/toolkit/` contains operation snapshots and archives when journal
-primitives are used. Phase 1 test evidence occupies a separate directory. These
+`.runtime/toolkit/` contains operation snapshots and archives when deployment
+operations are recorded. Phase 1 test evidence occupies a separate directory. These
 records are not a tamper-proof audit trail. See the Phase 2 contract for the
 initialization marker, legacy-journal handling and partial-loss limitations.
 

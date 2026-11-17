@@ -1,13 +1,15 @@
 # Decisions
 
-Status: Phase 1 merged. The corrective batch is committed as `7f31f39`. Batch D
-is implemented on that base; owner-side live acceptance remains pending.
+Status: Phase 1 merged. Phase 2 deployment is implemented at `fa8aaf1`, including
+the corrective batch and Batch D fix 1. All 153 owner-side tests passed in both
+modes, and the three planned live acceptance stages passed. Phase 2 PR closure
+is in progress; this does not claim the branch has merged.
 
 A recorded decision alone does not establish that its behavior is implemented
 or verified. CLI validation, Docker inspection, and the operation journal/lock
 components are implemented and integrated with the deployment command. Live
-acceptance is pending; recovery remains future work. Status reads records and
-observes Docker.
+acceptance passed for the recorded scenarios; recovery remains future work.
+Status reads records and observes Docker.
 
 A separate study document contains the detailed decision inventory and is maintained outside this repository.
 Local Phase 2 evidence is in [PHASE-2-VERIFICATION.md](PHASE-2-VERIFICATION.md).
@@ -28,7 +30,7 @@ selections. Early individual attribution is incomplete.
 | D08 | Attempt a small record for every operation. | Provides local operation history when recording succeeds; recording failures must be disclosed. |
 | D09 | Keep the demonstration schema fixed after Phase 1. | Avoids introducing migration and downgrade behavior into application rollback. |
 | D10 | Use feature branches and pull requests after bootstrap. | Makes changes reviewable; solo PRs do not imply independent review. |
-| D11 | Resolve deployed application images to immutable identifiers. | Avoids treating a movable tag as a reliable recovery target; Batch B resolves a local candidate to its immutable image ID. Batch D now uses and verifies that identity; live acceptance is pending. |
+| D11 | Resolve deployed application images to immutable identifiers. | Avoids treating a movable tag as a reliable recovery target; Batch B resolves a local candidate to its immutable image ID. Batch D now uses and verifies that identity; the recorded live acceptance passed. |
 | D12 | Keep database backup and restore outside the baseline. | A persistent volume supports container replacement but does not provide disaster recovery. |
 
 ## Demo workload selection
@@ -72,8 +74,8 @@ the runtime image simply to run host-side unit tests.
 
 Pinning the Python, PostgreSQL, and NGINX base images does not fulfill D11 by
 itself. The application tag `sdt-demo-api:phase1` is mutable. Batch B resolves it to
-an immutable image ID. Batch D now deploys that ID and checks actual image/release identity; live
-acceptance is pending.
+an immutable image ID. Batch D now deploys that ID and checks actual image/release
+identity; the recorded live acceptance passed.
 
 ## Phase 2 decisions and current implementation status
 
@@ -84,7 +86,7 @@ selection to the user. See the inventory for alternatives and detailed costs.
 | ID | Choice | Reason, consequence, and status |
 |---|---|---|
 | D21 | Standard-library argparse with `python -m toolkit`. | Small dependency footprint. Implemented in Batch A. |
-| D22 | Locally available candidate image and separate expected release input. | Keeps image acquisition outside deployment. Resolution and release verification implemented; live deployment acceptance pending. |
+| D22 | Locally available candidate image and separate expected release input. | Keeps image acquisition outside deployment. Resolution and release verification implemented; the recorded live deployment acceptance passed. |
 | D23 | Fixed demo configuration and default local Docker socket. | Bounds supported environments. Desktop/rootless contexts remain outside current support. |
 | D24 | Verification/request/retry/command defaults of 60/3/1/60 seconds. | Initial policy values, not measured performance requirements. Input validation, command timeouts and shared verification deadline implemented; cleanup uses a separate allowance. |
 | D25 | Targeted ownership checks before mutation. | Refuses unexpected checkout labels, resources and sharing. Checks repeat under the deployment lock; external Docker commands remain outside that lock. |
@@ -94,8 +96,8 @@ selection to the user. See the inventory for alternatives and detailed costs.
 | D29 | Persist pending intent before mutation and block unfinished/invalid state. | Preserves uncertainty after interruption. Deployment integration implemented; reconciliation remains Phase 3 work. |
 | D30 | Temporary-file replacement and filesystem synchronization for records. | Reduces partial-write exposure. Write-failure tests passed. Sudden power-loss durability remains untested. |
 | D31 | Read-only status remains available when operation state is uncertain. | Supports diagnosis. Uncertainty exits 6 even if Docker observation also fails. Implemented. |
-| D32 | Verify a matching image already running, without unnecessary replacement. | User explicitly selected and reaffirmed. Full verification precedes success recording. Implemented in Batch D; live acceptance pending. |
-| D33 | Allow an explicit deployment to replace a stopped, owned API when dependencies and recorded state permit it. | User explicitly selected and reaffirmed after discussing the startup-failure scenario. Preflight now permits an owned API in the exited state while retaining dependency and ownership checks. Deployment integration is implemented; live acceptance remains pending. |
+| D32 | Verify a matching image already running, without unnecessary replacement. | User explicitly selected and reaffirmed. Full verification precedes success recording. Implemented in Batch D; the recorded live acceptance passed. |
+| D33 | Allow an explicit deployment to replace a stopped, owned API when dependencies and recorded state permit it. | User explicitly selected and reaffirmed after discussing the startup-failure scenario. Preflight now permits an owned API in the exited state while retaining dependency and ownership checks. Deployment integration is implemented; the recorded live acceptance passed. |
 
 D32 applies to an API that is running. A stopped API still needs startup or
 replacement even when the selected image ID matches. D33 does not permit
@@ -111,23 +113,22 @@ bypassing pending-operation or ownership checks.
   Live preflight subsequently passed. This is recorded as B01 in the evidence file.
 - D33 revises the earlier implementation choice requiring the API to be running
   before a new deployment. The preflight revision is implemented and covered
-  by automated tests. Actual replacement is now implemented by Batch D; live acceptance remains pending.
+  by automated tests. Actual replacement is now implemented by Batch D; the recorded live acceptance passed.
 
 ## Remaining implementation decisions
 
-Before Phase 2 is complete:
-
-- Complete owner-side live acceptance of D32/D33 and the verification failure path.
-- Exercise a separately built candidate image and confirm dependency preservation.
-- Review Batch D limitations and close Phase 2 evidence without claiming rollback.
+Phase 2 acceptance is recorded in PHASE-2-VERIFICATION.md. D32/D33, the wrong
+expected-release path, a separately built candidate and dependency-container
+preservation passed their live exercises. The remaining handoff is review and
+merge of the Phase 2 PR; no further deployment feature is added by closure.
 
 Batch D implements shared deadlines, bounded probes, five result groups, exit-code
 handling, generated-override ownership, selected configuration consistency checks
 and action recording. Automated tests do not replace the live acceptance above.
 
-The basic image identity, lock and JSON formats are implemented. Their full
-integration must still pass acceptance checks. Recording every attempted
-operation remains a broader baseline goal: current read-only commands do not
+The basic image identity, lock and JSON formats are implemented. Their integration
+passed the recorded live scenarios; this does not verify every failure path.
+Recording every attempted operation remains a broader baseline goal: current read-only commands do not
 persist operation history. Deployment records start after successful preflight;
 refusals before begin are reported only in the terminal.
 
@@ -180,9 +181,9 @@ added to this repository.
 ## Batch D implementation decisions
 
 These entries extend the A–C choices with Batch D implementation details. D32 and D33
-are implemented and tested with a simulated daemon; owner-side live acceptance
-is pending. D35 is implemented for unconfirmed command outcomes; reconciliation
-remains Phase 3. The initial timing defaults remain unchanged.
+are implemented, tested with a simulated daemon, and exercised successfully on
+the owner's Docker stack. D35 is implemented for unconfirmed command outcomes;
+reconciliation remains Phase 3. The initial timing defaults remain unchanged.
 
 | ID | Choice | Reason and consequence |
 |---|---|---|
@@ -195,3 +196,17 @@ remains Phase 3. The initial timing defaults remain unchanged.
 These implementation details were selected by the assistant within the approved
 batch scope. Candidate images retain user 10001:10001. No new paid service,
 infrastructure platform, rollback mode or application feature is introduced.
+
+## Batch D corrections and Phase 2 closure
+
+- The replacement guard accepts absent or null `command` and `entrypoint` fields
+  because they preserve image defaults. Non-null values, including empty strings
+  and lists, remain refused. This corrects a false refusal, not a new startup mode.
+- HTTPError response objects are explicitly closed. The initial 149-test owner
+  run emitted cleanup warnings despite reporting OK; the corrected 153-test run
+  passed without those warnings. Defects are not accepted as trade-offs.
+- Batch E updates current-status wording and publishes the unchanged manual
+  acceptance driver under scripts/ so reviewers can reproduce the exercises.
+  It changes no deployment behavior and adds no dependency. Study documents
+  remain outside the repository; a selected-trade-offs document is deferred
+  until the end of the project, if the owner wants it.

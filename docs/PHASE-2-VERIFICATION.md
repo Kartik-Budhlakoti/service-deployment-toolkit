@@ -1,9 +1,11 @@
 # Phase 2 contract and verification
 
-Current status: Batch D deployment integration is implemented with automated
-verification. Owner-side live acceptance is pending. Phase 3 reconciliation and
-recovery remain future work. Earlier sections are historical batch records;
-later corrections explicitly supersede them.
+Current status: Phase 2 deployment at `fa8aaf1` passed all 153 owner-side tests
+normally and under optimization with warnings treated as errors, plus all three
+planned live acceptance stages. Batch E prepares PR closure; merge is not claimed.
+Phase 3 reconciliation and recovery remain future work. Earlier sections are
+historical batch records; the final owner verification supersedes earlier pending
+acceptance statements and test counts.
 
 ## Batch A: command interface (historical acceptance record)
 
@@ -596,3 +598,70 @@ deployment, not an automatic rollback or a dedicated rollback command.
 Live interruption handling, command-timeout uncertainty, and recovery
 from recording failures were not established by these exercises.
 Checks establish point-in-time observations, not continuous availability.
+
+
+## Batch E: Phase 2 closure review
+
+Reviewed base: `fa8aaf196db59b661c1bf5403b64970cf4003a2e` on
+`feat/deployment-cli`. The owner committed and pushed that revision with a clean
+working tree. Closure changes current-status documentation and adds the unchanged
+manual acceptance driver; it does not change toolkit, demo or test logic.
+
+| Phase 2 acceptance item | Evidence and boundary |
+|---|---|
+| Explicit local image and release selection | Preflight resolves a full local image ID; candidate acceptance exercised a different image and demo-v2 metadata. |
+| Ownership and API-only replacement | Targeted checks and simulated refusals; live stopped/candidate exercises retained database and proxy container IDs. Not global Docker isolation. |
+| Lock and write-before-replace | Real temporary-filesystem/cross-process tests and integration tests. No live daemon interruption exercise is claimed. |
+| Five verification groups | Live success and wrong-release rejection; same-attempt and deadline edge cases covered by automated tests. |
+| Failed verification preserves last success | Deliberate wrong-release live exercise and journal tests. |
+| Persistent initialization marker | Temporary-directory tests cover missing state and failed writes. Not power-loss testing or backup. |
+| Unconfirmed command outcomes | Simulated command failures retain pending intent and produce observations. Live timeout/hard-kill reconciliation remains Phase 3. |
+| Current evidence | 153 distinct test methods, each run in two modes by the owner; three live acceptance stages. No CI or clean-machine claim. |
+
+### Reproduce the live exercises
+
+Use a dedicated local demo already initialized using the README, with the existing
+credentials, supported default Docker context, no pending journal operation, and
+the running image matching `sdt-demo-api:phase1` with release demo-v1. Run from the
+repository root. Do not run concurrent external Docker commands during an exercise.
+
+The following driver is the exact script used for the owner's successful stages,
+now tracked at `scripts/phase2-acceptance.py`. It is a manual test driver, not a
+production deployment entry point or part of the 153 automatically discovered tests.
+
+```bash
+python scripts/phase2-acceptance.py verify
+python scripts/phase2-acceptance.py stopped
+python scripts/phase2-acceptance.py candidate
+```
+
+Run one stage at a time and inspect its result before continuing. `verify`
+intentionally requests a wrong release and expects failure before verifying v1
+again. `stopped` deliberately interrupts the API and asks the toolkit to replace
+it. `candidate` builds a temporary demo-v2 image, deploys it, then explicitly
+deploys the captured original image. It retains the candidate image locally.
+Build may require available package downloads if cache layers are unavailable.
+It does not edit the repository's release.txt or run database initialization.
+
+After each stage:
+
+```bash
+python -m toolkit status
+python tests/smoke.py
+```
+
+If a stage stops, inspect the result before proceeding. A failure can leave the
+API stopped, a candidate running, or a pending operation. The driver does not
+promise automatic restoration after failure. Do not erase the journal or retry a
+mutation to bypass uncertainty. Reconciliation is not implemented in Phase 2.
+The manual driver has no total runtime deadline; toolkit command/verification
+budgets do not bound the driver's separate Docker build and stop commands.
+
+### Closure boundary
+
+The recorded Phase 2 criteria are met for the supported local workload. This is
+readiness for PR review, not proof of zero defects or confirmation of merge.
+The next phase must design manual rollback, compatibility eligibility and
+interrupted-operation reconciliation. Diagnostic evidence and CI/clean-install
+work retain their later-phase scope. A previous successful record is not itself
+proof that an old image is safe to run under changed settings or data.

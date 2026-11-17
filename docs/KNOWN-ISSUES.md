@@ -1,8 +1,9 @@
 # Known Issues and Limitations
 
-Status: Phase 1 merged. Phase 2 Batch D deployment integration is implemented
-with automated checks. Owner-side live deployment acceptance, rollback,
-reconciliation, detailed diagnostics and CI remain pending.
+Status: Phase 1 merged. Phase 2 deployment at `fa8aaf1` passed the owner's 153-test
+suite in both modes and all three planned live acceptance stages. Phase 2 PR
+closure is in progress. Rollback, reconciliation, detailed diagnostics and CI
+remain future work. Live timeout/interruption recovery is not established.
 
 ## Phase 1 verification record (historical)
 
@@ -60,10 +61,26 @@ Resolution: development requirements use `httpx2==2.15.1` rather than the old
 `httpx` dependency. Nine tests passed with warnings treated as errors in normal
 and optimized modes, including a fresh development-lock installation.
 
+### F04: default startup fields caused a false deployment refusal
+
+The initial Batch D allowlist rejected resolved API `command` and `entrypoint`
+fields even when null. The owner observed a refusal before any operation was
+recorded. Fix 1 accepts absent/null defaults and still rejects every non-null
+startup override. The owner confirmed both defaults and passed live acceptance.
+Regression tests distinguish null from empty strings/lists and actual overrides.
+
+### F05: rejected HTTP responses were not explicitly closed
+
+The initial Batch D worker caught HTTPError without closing its response. The
+owner's Python 3.14.10 runs emitted cleanup ResourceWarnings for 302 and 503
+responses even though unittest reported OK. Fix 1 closes the error response;
+regression tests check closure. Both corrected owner test runs passed without
+the reported warnings. An OK line alone was insufficient evidence of clean tests.
+
 ## Current limitations and open verification gaps
 
 - The CLI implements deployment with journal/lock integration and five verification
-  groups. Live owner acceptance is pending. Rollback, reconciliation, full
+  groups. The recorded live owner acceptance passed. Rollback, reconciliation, full
   diagnostic reports and CI are not implemented.
 - Deployment repeats targeted ownership checks under its lock. Manual Compose
   commands bypass these checks and can invalidate local operation history.

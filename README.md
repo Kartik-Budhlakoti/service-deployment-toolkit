@@ -7,9 +7,12 @@ The demonstration workload is a small FastAPI catalogue, PostgreSQL, and NGINX.
 
 ## Current status
 
-Phase 1 is merged. Phase 2 Batch D connects preflight, locking, records and
-verification to API-only deployment. Automated verification is recorded below;
-owner-side live deployment acceptance is pending. No rollback command exists yet.
+Phase 1 is merged. Phase 2 deployment is implemented and locally verified at
+`fa8aaf1`; the Phase 2 branch is undergoing closure and PR review. All 153 tests
+passed in normal and optimized modes on the owner's Python 3.14.10 environment.
+Live exercises covered verification-only, stopped-API replacement, a different
+candidate image, and explicit redeployment of the original image. No rollback
+or reconciliation command exists yet.
 
 The demo has been exercised on EndeavourOS x86_64 with Python 3.14.10,
 Docker Engine 29.9.3, and Compose 5.7.1. These are tested versions, not a claim
@@ -154,7 +157,12 @@ digest; dependency and image updates require deliberate review and retesting.
 - Fixture persistence across database-container replacement without reseeding.
 - Refusal to overwrite conflicting fixture data, followed by restoration.
 - Locked-image rebuild, running-image identity, and all 16 runtime package pins.
-- Fresh development-lock installation with nine passing tests in both modes.
+- Phase 1 fresh development-lock installation with nine passing tests in both modes.
+- Phase 2's 153 tests passed in both modes with no reported cleanup warnings.
+- Verification-only left the API container unchanged; a wrong expected release
+  failed while preserving the previous successful record.
+- Stopped-API and changed-image replacement passed with database and NGINX
+  container IDs unchanged; explicit redeployment returned the demo to v1.
 
 These are local results, not CI results or a complete clean-machine installation
 claim. Detailed evidence boundaries and remaining gaps are recorded in
@@ -211,10 +219,18 @@ Do not delete that record to retry. Reconciliation remains Phase 3 work.
 See [Phase 2 verification](docs/PHASE-2-VERIFICATION.md) for timing, exit codes,
 configuration boundaries, and the distinction between tests and live acceptance.
 
+## Reproduce Phase 2 acceptance
+
+The manual driver is [scripts/phase2-acceptance.py](scripts/phase2-acceptance.py).
+Its three stages were run successfully by the owner before the driver was added
+to the repository unchanged. See the [reproduction instructions](docs/PHASE-2-VERIFICATION.md#reproduce-the-live-exercises)
+for prerequisites, commands and expected effects. These exercises deliberately
+replace the demo API; they are not part of automatic unit-test discovery.
+
 ## Next phases and boundaries
 
-Next comes live acceptance of the deployment workflow and Phase 2 closure.
-Manual rollback will be the default in Phase 3; automatic recovery will require
+Phase 2 is ready for final PR review after the closure documentation is applied.
+Phase 3 adds manual rollback and reconciliation; automatic recovery will require
 opt-in and compatibility checks. Recovery and reconciliation are not implemented.
 
 The baseline targets one local stack. It excludes Kubernetes, paid hosting,
