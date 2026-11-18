@@ -210,3 +210,14 @@ infrastructure platform, rollback mode or application feature is introduced.
   It changes no deployment behavior and adds no dependency. Study documents
   remain outside the repository; a selected-trade-offs document is deferred
   until the end of the project, if the owner wants it.
+
+## Phase 3 Batch A — recovery target and eligibility
+
+Phase 2 merged at `e960f68`. These two owner-selected rules define the Phase 3 design. Runtime implementation and live acceptance are pending.
+
+| ID | Decision | Alternative and cost |
+|---|---|---|
+| D42 | Manual rollback selects a verified successful operation by full ID and repeats eligibility checks before mutation. | Implicitly selecting the preceding success is quicker, but repeated verification and deployment can make the intended target ambiguous. Showing release, time and image alongside the operation ID helps the operator choose. |
+| D43 | Manual rollback may explicitly accept changed base Compose file bytes only when the entire supported resolved base model and all independent compatibility evidence still match. Automatic recovery stays strict. | Strict-only refusal is simpler but blocks comment edits. A general force flag could accept a changed credential or dependency. The narrow exception adds evidence collection, comparison and tests. Legacy records require fresh verification before a new eligible baseline can exist. |
+
+See the [Phase 3 recovery contract](PHASE-3-RECOVERY.md) for the decision table, secret handling and required evidence.
