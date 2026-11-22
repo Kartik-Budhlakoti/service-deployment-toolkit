@@ -94,7 +94,7 @@ def check_compose(config, root):
             and proxy_mounts[0].get("read_only") is True, "Unexpected Compose proxy mount")
 
 
-def check_resources(items, root):
+def check_resources(items, root, *, pending_image=None):
     require(len(items) == 3, "Expected exactly api, db and nginx containers; initialize the demo or resolve extra resources")
     selected = {}
     for item in items:
@@ -140,13 +140,15 @@ def check_resources(items, root):
                     and mounts[0].get("RW") is False, "Unexpected actual proxy mount")
         if service == "api" and labels.get(LABEL + "project.config_files") == (
                 str(root / "compose.yaml") + "," + str(override_path(root))):
-            require(item.get("Image") == read_override(root), "API image differs from toolkit override")
+            override = read_override(root)
+            require(item.get("Image") == override or (pending_image is not None and override == pending_image),
+                    "API image differs from toolkit override")
         image_id({"Id": item.get("Image")})
         selected[service] = item
     return selected
 
 
-def inspect_preflight(request, root=None, docker=None):
+def inspect_preflight(request, root=None, docker=None, *, pending_image=None):
     root = Path(root or Path.cwd()).resolve()
     docker = docker or Docker(root, request.settings.command_timeout)
     try:
@@ -161,7 +163,7 @@ def inspect_preflight(request, root=None, docker=None):
         require(candidate.get("Os") == "linux" and candidate.get("Architecture") == architecture,
                 "Candidate image platform does not match the local daemon")
         require(not candidate.get("Config", {}).get("Volumes"), "Candidate image declares unsupported volumes")
-        selected = check_resources(containers(docker), root)
+        selected = check_resources(containers(docker), root, pending_image=pending_image)
         for name in ("db", "nginx"):
             expected_image = single(docker.json("image", "inspect", config["services"][name]["image"]), "dependency image")
             require(selected[name]["Image"] == image_id(expected_image), f"Running {name} image differs from Compose configuration")
@@ -185,6 +187,35 @@ def inspect_preflight(request, root=None, docker=None):
         return {"candidate_image_id": resolved, "current_image_id": selected["api"]["Image"],
                 "expected_release": request.release, "api_running": selected["api"]["State"]["Running"],
                 "api_id": selected["api"]["Id"],
+                "api_started_at": selected["api"]["State"].get("StartedAt"),
                 "dependency_ids": {name: selected[name]["Id"] for name in ("db", "nginx")}}
     except (KeyError, TypeError, AttributeError, IndexError):
         raise InspectionError("Docker/Compose metadata has an unsupported or incomplete structure") from None
+
+
+def validate_replacement_config(docker, root):
+    config = docker.compose("config", "--format", "json")
+    try:
+        api = config["services"]["api"]
+        allowed = {"build", "image", "environment", "ports", "networks", "depends_on",
+                   "healthcheck", "read_only", "cap_drop", "security_opt",
+                   "command", "entrypoint"}
+        require(set(api) <= allowed, "Unsupported API deployment configuration")
+        require(api.get("command") is None and api.get("entrypoint") is None,
+                "API command and entrypoint overrides are unsupported")
+        require(api.get("read_only") is True and api.get("cap_drop") == ["ALL"]
+                and api.get("security_opt") == ["no-new-privileges:true"],
+                "Expected API hardening is missing")
+        require(set(api.get("environment", {})) == {"DB_HOST", "DB_NAME", "DB_USER", "DB_PASSWORD"},
+                "Unsupported API environment settings")
+        require(api["environment"]["DB_HOST"] == "db"
+                and api["environment"]["DB_NAME"] == "catalogue"
+                and api["environment"]["DB_USER"] == "catalogue_reader",
+                "Unexpected API database configuration")
+    except (KeyError, TypeError, AttributeError):
+        raise InspectionError("Unsupported API deployment configuration") from None
+
+def require_demo_user(docker, image):
+    candidate = single(docker.json("image", "inspect", image), "candidate image")
+    require((candidate.get("Config") or {}).get("User") == "10001:10001",
+            "Candidate must retain the demo non-root user 10001:10001")

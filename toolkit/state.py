@@ -10,6 +10,7 @@ from uuid import uuid4
 
 from .config import ConfigurationError, Settings, validate_release
 from .locking import mutation_lock
+from .docker import unique_object
 
 
 MAX_RECORD_BYTES = 8192
@@ -46,16 +47,77 @@ def _matches(pattern, value):
 
 
 CHECK_NAMES = ("container", "liveness", "identity", "catalogue", "proxy")
+CLOSED_UNKNOWN = "closed-unknown"
+
+
+def _check_reconciliation(observation):
+    if (type(observation) is not dict or set(observation) != {"api_id", "image_id", "running"}
+            or not _matches(r"[0-9a-f]{64}", observation["api_id"])
+            or not _matches(r"sha256:[0-9a-f]{64}", observation["image_id"])
+            or type(observation["running"]) is not bool):
+        raise ValueError("Invalid reconciliation observation")
+
+
+def _record_version(record):
+    if ("reconciliation" in record or "auto_target" in record
+            or record.get("recovery", {}).get("kind") == "automatic"):
+        return 4
+    if "recovery" in record:
+        return 3
+    return 2 if "action" in record else 1
 
 
 def _check_record(record):
     required = {"id", "status", "image_id", "release", "started_at", "finished_at"}
-    if type(record) is not dict or set(record) not in (required, required | {"action", "checks"}):
+    extended = required | {"action", "checks"}
+    shapes = (required, extended, extended | {"recovery", "evidence"},
+              extended | {"auto_target", "evidence"})
+    if type(record) is not dict or (set(record) - {"reconciliation"}) not in shapes:
         raise ValueError
+    status = record["status"]
+    if ("reconciliation" in record) != (status == CLOSED_UNKNOWN):
+        raise ValueError
+    if "reconciliation" in record:
+        _check_reconciliation(record["reconciliation"])
+    if "recovery" in record:
+        meta = record["recovery"]
+        if type(meta) is not dict:
+            raise ValueError
+        fields = {"kind", "target", "requested", "needed"}
+        if meta.get("kind") == "automatic":
+            fields.add("trigger")
+        if set(meta) != fields:
+            raise ValueError
+        if type(meta["requested"]) is not bool or type(meta["needed"]) is not bool:
+            raise ValueError
+        if meta["needed"] and not meta["requested"]:
+            raise ValueError
+        if meta["kind"] == "baseline":
+            if meta["target"] is not None or meta["requested"] or meta["needed"]:
+                raise ValueError
+        elif (meta["kind"] not in ("rollback", "automatic") or meta["target"] == record["id"]
+              or not _matches(r"[0-9a-f]{32}", meta["target"])):
+            raise ValueError
+        if meta["kind"] == "automatic" and (
+            meta["requested"] or record["action"] != "replace"
+            or not _matches(r"[0-9a-f]{32}", meta["trigger"])
+            or meta["trigger"] in (meta["target"], record["id"])
+        ):
+            raise ValueError
+    if "auto_target" in record and (
+        not _matches(r"[0-9a-f]{32}", record["auto_target"])
+        or record["auto_target"] == record["id"] or record["action"] != "replace"
+    ):
+        raise ValueError
+    if "evidence" in record:
+        if (record["evidence"] is not None) != (status == "succeeded"):
+            raise ValueError
+        if record["evidence"] is not None and type(record["evidence"]) is not dict:
+            raise ValueError
     if "action" in record:
         if record["action"] not in ("verify-only", "replace"):
             raise ValueError
-        if record["status"] == "pending":
+        if status in ("pending", CLOSED_UNKNOWN):
             if record["checks"] is not None:
                 raise ValueError
         else:
@@ -70,10 +132,9 @@ def _check_record(record):
     started = datetime.fromisoformat(record["started_at"])
     if started.utcoffset() != timezone.utc.utcoffset(None):
         raise ValueError
-    status = record["status"]
     if status == "pending" and record["finished_at"] is None:
         return
-    if status not in ("succeeded", "failed"):
+    if status not in ("succeeded", "failed", CLOSED_UNKNOWN):
         raise ValueError
     finished = datetime.fromisoformat(record["finished_at"])
     if finished.utcoffset() != timezone.utc.utcoffset(None):
@@ -94,7 +155,7 @@ def _read_json(path):
         data = file.read(MAX_RECORD_BYTES + 1)
     if len(data) > MAX_RECORD_BYTES:
         raise ValueError
-    return json.loads(data)
+    return json.loads(data, object_pairs_hook=unique_object)
 
 
 def read_state(root=None):
@@ -110,12 +171,18 @@ def read_state(root=None):
             return EMPTY.copy()
         if type(state) is not dict or state.keys() != EMPTY.keys():
             raise ValueError
-        if type(state["version"]) is not int or state["version"] not in (1, 2):
+        if type(state["version"]) is not int or state["version"] not in (1, 2, 3, 4):
             raise ValueError
         latest = state["latest"]
         last_success = state["last_success"]
         _check_record(latest)
-        if state["version"] == 2 and ("action" not in latest or not initialized):
+        if state["version"] >= 2 and not initialized:
+            raise ValueError
+        if state["version"] == 1:
+            # Older readers allowed a completed action record in a v1 snapshot.
+            if _record_version(latest) > 2:
+                raise ValueError
+        elif state["version"] != _record_version(latest):
             raise ValueError
         if last_success is not None:
             _check_record(last_success)
@@ -179,7 +246,15 @@ class OperationJournal:
         self._state = state
         self._closed = False
 
-    def begin(self, image_id, release, action=None):
+    @property
+    def latest(self):
+        return self._state["latest"]
+
+    @property
+    def last_success(self):
+        return self._state["last_success"]
+
+    def begin(self, image_id, release, action=None, recovery=None, auto_target=None):
         if self._closed:
             raise RuntimeError("Operation session is closed")
         if not _matches(r"sha256:[0-9a-f]{64}", image_id):
@@ -200,6 +275,22 @@ class OperationJournal:
         }
         if action is not None:
             record.update(action=action, checks=None)
+        if recovery is not None:
+            record.update(recovery=dict(recovery), evidence=None)
+        if auto_target is not None:
+            record.update(auto_target=auto_target, evidence=None)
+        _check_record(record)
+        if auto_target is not None and (
+            self.last_success is None or auto_target != self.last_success["id"]
+            or self.last_success.get("evidence") is None
+        ):
+            raise StateUncertain("The automatic recovery baseline is no longer the last recorded success")
+        if recovery and recovery["kind"] == "automatic" and (
+            latest is None or latest["status"] != "failed" or latest["id"] != recovery["trigger"]
+            or latest.get("auto_target") != recovery["target"]
+            or self.last_success is None or self.last_success["id"] != recovery["target"]
+        ):
+            raise StateUncertain("Automatic recovery requires the immediately preceding recorded failure")
         try:
             # Save the marker first: interruption here must not look like first use.
             if not _read_marker(self._directory):
@@ -215,12 +306,16 @@ class OperationJournal:
             raise
         return record["id"]
 
-    def finish(self, operation_id, outcome, checks=None):
+    def _pending(self, operation_id):
         if self._closed:
             raise RuntimeError("Operation session is closed")
-        latest = self._state["latest"]
+        latest = self.latest
         if latest is None or latest["id"] != operation_id or latest["status"] != "pending":
             raise StateUncertain("The requested operation is not the pending operation")
+        return latest
+
+    def finish(self, operation_id, outcome, checks=None, evidence=None):
+        latest = self._pending(operation_id)
         if outcome not in ("succeeded", "failed"):
             raise ValueError("Finish requires a known success or failure")
         record = dict(latest, status=outcome, finished_at=datetime.now(timezone.utc).isoformat())
@@ -231,11 +326,26 @@ class OperationJournal:
             record["checks"] = dict(checks)
         elif checks is not None:
             raise ValueError("Legacy records do not support check results")
+        if "evidence" in record:
+            record["evidence"] = evidence
+            _check_record(record)
         last_success = record if outcome == "succeeded" else self._state["last_success"]
         self._save(record, last_success)
 
+    def close_unknown(self, operation_id, observation):
+        latest = self._pending(operation_id)
+        record = dict(latest, status=CLOSED_UNKNOWN, reconciliation=dict(observation),
+                      finished_at=datetime.now(timezone.utc).isoformat())
+        _check_record(record)
+        try:
+            if not _read_marker(self._directory):
+                _write_json(self._directory / "initialized.json", MARKER)
+        except (OSError, ValueError, RecursionError):
+            raise StateUncertain("Journal marker became unreadable or invalid") from None
+        self._save(record, self.last_success)
+
     def _save(self, record, last_success):
-        state = {"version": 2 if "action" in record else 1, "latest": record, "last_success": last_success}
+        state = {"version": _record_version(record), "latest": record, "last_success": last_success}
         try:
             _write_json(self._directory / "state.json", state)
         except RecordError:
@@ -245,7 +355,7 @@ class OperationJournal:
 
 
 @contextmanager
-def operation_session(root=None):
+def operation_session(root=None, *, allow_pending=False):
     root = Path(root or Path.cwd()).resolve()
     directory = state_directory(root)
     with ExitStack() as stack:
@@ -257,7 +367,7 @@ def operation_session(root=None):
         except OSError:
             raise RecordError("Could not prepare the operation directory or lock") from None
         state = read_state(root)
-        if state["latest"] is not None and state["latest"]["status"] == "pending":
+        if not allow_pending and state["latest"] is not None and state["latest"]["status"] == "pending":
             raise StateUncertain("An unfinished operation requires inspection")
         journal = OperationJournal(directory, state)
         try:

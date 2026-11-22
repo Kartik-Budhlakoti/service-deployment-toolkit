@@ -36,9 +36,10 @@ class CheckTests(unittest.TestCase):
         self.http_calls.append((url, kind, timeout))
         return True
 
-    def run_check(self, http=None):
+    def run_check(self, http=None, *, expected_api=None):
         return verify(self.request, Path('/tmp'), object(), IMAGE, self.deps,
-                      clock=lambda: self.now, sleep=self.sleep, http=http or self.http)
+                      clock=lambda: self.now, sleep=self.sleep, http=http or self.http,
+                      expected_api=expected_api)
 
     def test_all_five_groups_must_pass_in_same_attempt(self):
         result = self.run_check()
@@ -62,6 +63,11 @@ class CheckTests(unittest.TestCase):
     def test_dependency_replacement_is_not_success(self):
         self.rows['db']['Id'] = 'f'*64
         self.assertFalse(self.run_check().passed)
+        self.assertEqual(self.http_calls, [])
+
+    def test_probes_cannot_pass_for_a_different_process_start(self):
+        self.api["State"]["StartedAt"] = "after"
+        self.assertFalse(self.run_check(expected_api=(self.api["Id"], "before")).passed)
         self.assertEqual(self.http_calls, [])
 
     def test_restart_during_cycle_invalidates_that_cycle(self):

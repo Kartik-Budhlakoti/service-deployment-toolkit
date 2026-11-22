@@ -54,7 +54,7 @@ class BudgetDocker:
 
 
 def verify(request, root, docker, image, dependency_ids, duration=None,
-           clock=time.monotonic, sleep=time.sleep, http=http_check):
+           clock=time.monotonic, sleep=time.sleep, http=http_check, *, expected_api=None):
     settings = request.settings
     deadline = clock() + (duration if duration is not None else settings.verification_timeout)
     bounded = BudgetDocker(docker, deadline, clock)
@@ -72,7 +72,10 @@ def verify(request, root, docker, image, dependency_ids, duration=None,
         selected = check_resources(containers(bounded), root)
         if any(selected[name]["Id"] != value for name, value in dependency_ids.items()):
             raise InspectionError("Dependency container changed during verification")
-        return selected["api"]
+        api = selected["api"]
+        if expected_api is not None and (api["Id"], api["State"].get("StartedAt")) != expected_api:
+            raise InspectionError("API instance changed during verification")
+        return api
 
     while clock() < deadline:
         attempts += 1
@@ -89,6 +92,7 @@ def verify(request, root, docker, image, dependency_ids, duration=None,
             after = inspect()
             stable = (after["Id"] == api["Id"] and after["Image"] == api["Image"]
                       and after.get("RestartCount", 0) == api.get("RestartCount", 0)
+                      and after["State"].get("StartedAt") == api["State"].get("StartedAt")
                       and after["State"]["Running"] is True)
             result["container"] = result["container"] and stable
         except (InspectionError, KeyError, TypeError, AttributeError, IndexError):

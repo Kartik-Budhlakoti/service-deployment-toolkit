@@ -1,9 +1,11 @@
 # Architecture
 
-Status: Phase 1 merged. Phase 2 integrates deployment, verification, inspection
-and journal/lock components. At `fa8aaf1`, 153 tests passed on the owner's machine
-in both modes, and all three planned live acceptance stages passed. Phase 2 PR
-closure is in progress. Recovery and reconciliation remain Phase 3 work.
+Phase 2 merged at `e960f68` after 153 tests and three live deployment exercises.
+The Phase 3 live runs on 22 November 2026 covered manual selection of a
+recorded v1 release, reconciliation after controlled toolkit exits and opt-in
+automatic recovery from a failed candidate. The final run verified v1 through
+both HTTP routes and retained the database and proxy container IDs.
+[Phase 3 verification](PHASE-3-RECOVERY.md#combined-live-results)
 
 ## Purpose and scope
 
@@ -125,15 +127,16 @@ Readiness assists startup and diagnosis; it does not replace catalogue checks.
 Passing the checks establishes only the tested conditions, not complete
 correctness, security, or future availability.
 
-## Planned recovery policy
+## Recovery policy
 
 Manual rollback is the default. A failed deployment must be reported without
 automatically replacing it again; service may remain unavailable until the
 operator acts.
 
 Automatic recovery requires explicit opt-in, a previous recorded successful
-release whose image remains available, and supported image-only changes under
-unchanged runtime configuration, database schema, and dependency arrangement.
+release whose image is available and running, fresh baseline verification, and
+supported image-only changes under unchanged runtime configuration, database
+schema and dependency arrangement.
 Eligibility relies on declared compatibility and available checks, not proof of
 arbitrary compatibility. Missing or inconsistent evidence must prevent automatic
 recovery.
@@ -151,8 +154,10 @@ a failed candidate must not overwrite the previous successful release reference.
 
 Incomplete operations, inconsistent state, or unreadable state require inspection
 before further mutations. Unknown state must not be treated as success. Read-only
-status and diagnosis should remain available. The current JSON state format is
-implemented and integrated with deployment; reconciliation remains Phase 3 work.
+status and reconciliation preview remain available. A confirmed reconciliation
+can close a pending operation as unknown after rechecking it under the same lock.
+It preserves the last verified success and can repair the local override when
+the pending intended image explains the mismatch with the observed owned API.
 
 Each operation must attempt a small local JSON record and print a concise result.
 Deployment and recovery outcomes are separate. Failure evidence must be bounded,
@@ -220,8 +225,8 @@ uncertain outcome, not a confirmed application failure. Batch D cleans up local
 command processes as far as possible, keeps pending intent, and attempts up to
 ten seconds of read-only observations. Observed image
 identity and HTTP results must not silently finalize an uncertain operation.
-There is no automatic retry or rollback on timeout. Phase 3 reconciliation must
-resolve uncertainty before another mutation. Docker daemon work and children
+An operator can close the pending outcome as unknown through reconciliation
+before another toolkit mutation. Docker daemon work and children
 that deliberately escape the local process group are outside cleanup guarantees.
 
 Inspection, deployment and HTTP-probe commands use isolated process groups and
@@ -245,5 +250,44 @@ have not changed. Brief failures between samples may still escape observation.
 Configuration file fingerprints stay in memory and are checked during the
 operation. They cover compose.yaml, .env and the NGINX bind-mounted configuration;
 they are not persisted secret hashes or a general runtime drift detector. External
-Docker commands and file edits can still race with the toolkit. Phase 3 must
-implement the separate cross-release compatibility checks for automatic recovery.
+Docker commands and file edits can still race with the toolkit. Automatic
+recovery adds strict cross-release compatibility checks before the candidate
+deployment and again before rollback.
+
+## Manual recovery implementation
+
+`toolkit/compatibility.py` observes the supported input and runtime fields and
+computes keyed comparisons. `toolkit/recovery.py` validates history, selects one
+full operation ID and evaluates eligibility. The existing deployment function
+performs the attempt under the mutation lock and records recovery metadata in
+version 3 state. Version 1 and 2 history stays readable.
+
+The `baseline` command explicitly registers a verified running release and its
+declared catalogue schema contract. The `targets` command lists recorded
+successes with current eligibility reasons. `rollback --to ID --dry-run`
+previews the same eligibility logic used by an actual attempt. Full observations
+before and after successful verification must agree before a new recovery target
+can be recorded. All observations are point-in-time checks.
+
+## Reconciliation and automatic recovery
+
+`toolkit/reconcile.py` inspects pending operations. Confirmation holds the
+journal lock, rechecks the exact pending ID and supported resources, and records
+the observed API image, container ID and running state. It can align the
+generated override with an owned API when the pending replacement explains
+the mismatch. A terminal `closed-unknown` record preserves the original intent
+and the previous verified success.
+
+The opted-in deployment verifies the last recorded success again before changing
+the API. It saves the selected baseline ID in the candidate operation. If Compose
+confirms completion and candidate verification fails, the lock remains held.
+The toolkit verifies the observed candidate container ID and start time. It
+records the failure before checking that the same instance is still current
+and that the baseline remains eligible. It renders the stored image override
+and repeats the compatibility and resource checks before calling Compose.
+An eligible recovery has its own record linked to the immediately preceding
+failure. Target selection also validates the links between automatic records.
+
+Version 4 snapshots and records support these outcomes. The current reader also
+accepts versions 1–3. The [Phase 3 contract](PHASE-3-RECOVERY.md) records the
+checks, exit codes and verification status.

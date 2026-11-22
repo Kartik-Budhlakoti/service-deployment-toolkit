@@ -9,11 +9,11 @@ class CommandError(RuntimeError):
     pass
 
 
-def run_command(arguments, root, environment, timeout):
+def run_command(arguments, root, environment, timeout, *, stdin=subprocess.DEVNULL):
     try:
         process = subprocess.Popen(
             arguments, cwd=root, env=environment,
-            stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            stdin=stdin, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             start_new_session=True,
         )
     except OSError:

@@ -75,7 +75,7 @@ class DockerRunnerTests(unittest.TestCase):
             while time.monotonic() < deadline:
                 try:
                     status = Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()[0]
-                except FileNotFoundError:
+                except (FileNotFoundError, ProcessLookupError):
                     return
                 if status == "Z":  # Exited; its new parent may not have reaped it yet.
                     return

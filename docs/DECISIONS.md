@@ -1,15 +1,12 @@
 # Decisions
 
-Status: Phase 1 merged. Phase 2 deployment is implemented at `fa8aaf1`, including
-the corrective batch and Batch D fix 1. All 153 owner-side tests passed in both
-modes, and the three planned live acceptance stages passed. Phase 2 PR closure
-is in progress; this does not claim the branch has merged.
-
-A recorded decision alone does not establish that its behavior is implemented
-or verified. CLI validation, Docker inspection, and the operation journal/lock
-components are implemented and integrated with the deployment command. Live
-acceptance passed for the recorded scenarios; recovery remains future work.
-Status reads records and observes Docker.
+Phase 2 merged at `e960f68` after the owner's 153 tests and three live deployment
+exercises. Phase 3 Batch B implements the manual recovery choices below on
+the recovery branch. The owner's 180 tests passed in both modes and its planned
+live baseline and flagged manual rollback exercise passed on 22 November 2026.
+The combined recovery batch subsequently passed 214 tests in both modes and
+the dedicated live reconciliation and automatic recovery exercises.
+[Phase 3 live results](PHASE-3-RECOVERY.md#combined-live-results)
 
 A separate study document contains the detailed decision inventory and is maintained outside this repository.
 Local Phase 2 evidence is in [PHASE-2-VERIFICATION.md](PHASE-2-VERIFICATION.md).
@@ -93,7 +90,7 @@ selection to the user. See the inventory for alternatives and detailed costs.
 | D26 | Bounded subprocess capture with raw errors withheld. | Limits output and avoids printing configuration values. Generic failures provide limited diagnostic detail. Implemented. |
 | D27 | One nonblocking Linux file lock per checkout. | Coordinates participating toolkit processes in that checkout. Cross-checkout/global coordination is outside this implementation. Implemented and tested with separate processes. |
 | D28 | JSON snapshot with latest operation and last success, plus archived completed records. | Inspectable local history with custom validation and filesystem handling. Implemented and tested. |
-| D29 | Persist pending intent before mutation and block unfinished/invalid state. | Preserves uncertainty after interruption. Deployment integration implemented; reconciliation remains Phase 3 work. |
+| D29 | Persist pending intent before mutation and block unfinished/invalid state. | Preserves uncertainty after interruption. Deployment uses this guard. Phase 3 adds explicit closure of a pending operation. |
 | D30 | Temporary-file replacement and filesystem synchronization for records. | Reduces partial-write exposure. Write-failure tests passed. Sudden power-loss durability remains untested. |
 | D31 | Read-only status remains available when operation state is uncertain. | Supports diagnosis. Uncertainty exits 6 even if Docker observation also fails. Implemented. |
 | D32 | Verify a matching image already running, without unnecessary replacement. | User explicitly selected and reaffirmed. Full verification precedes success recording. Implemented in Batch D; the recorded live acceptance passed. |
@@ -119,8 +116,7 @@ bypassing pending-operation or ownership checks.
 
 Phase 2 acceptance is recorded in PHASE-2-VERIFICATION.md. D32/D33, the wrong
 expected-release path, a separately built candidate and dependency-container
-preservation passed their live exercises. The remaining handoff is review and
-merge of the Phase 2 PR; no further deployment feature is added by closure.
+preservation passed their live exercises. The Phase 2 PR merged at `e960f68`.
 
 Batch D implements shared deadlines, bounded probes, five result groups, exit-code
 handling, generated-override ownership, selected configuration consistency checks
@@ -132,15 +128,9 @@ Recording every attempted operation remains a broader baseline goal: current rea
 persist operation history. Deployment records start after successful preflight;
 refusals before begin are reported only in the terminal.
 
-Before automatic recovery is enabled in Phase 3:
-
-- Configuration-change detection, including secret-handling limits.
-- Supported compatibility declarations and eligibility checks.
-- Interrupted-operation reconciliation procedure.
-- Behavior when the previous image or required state is unavailable.
-
-Details must be resolved before the dependent behavior is accepted. Local
-Phase 1 checks do not establish that the later toolkit design is verified.
+Phase 3 implements compatibility checks, a schema declaration, reconciliation
+and a strict automatic recovery policy. The decisions and acceptance status
+are recorded below and in [the Phase 3 contract](PHASE-3-RECOVERY.md).
 
 ## Scope-change rule
 
@@ -170,7 +160,7 @@ assistant, with consequential assumptions recorded for review.
 | ID | Choice | Reason and consequence |
 |---|---|---|
 | D34 | Persist an initialization marker before the first pending record. | User selected. A marker without a snapshot blocks mutation, including interrupted initialization. Valid legacy snapshots are upgraded before their next operation; complete deletion is not detectable. Implemented in this corrective batch. |
-| D35 | After a deployment timeout, preserve uncertainty and attempt bounded read-only observations. | User selected. Do not retry, roll back or mark success solely from a timeout or a later healthy snapshot. Batch D implements observation reporting; reconciliation belongs to Phase 3. |
+| D35 | After a deployment timeout, preserve uncertainty and attempt bounded read-only observations. | User selected. Do not retry, roll back or mark success solely from a timeout or a later healthy snapshot. Batch D implements observation reporting; Phase 3 implements explicit pending closure. |
 | D36 | Isolate local command process groups and bound cleanup. | Assistant implementation detail supporting D35. Kills ordinary descendants without claiming cancellation of daemon work or escaped process groups. Implemented for the inspection runner. |
 
 CLI unit tests supply explicit state instead of reading the operator's journal.
@@ -183,7 +173,7 @@ added to this repository.
 These entries extend the A–C choices with Batch D implementation details. D32 and D33
 are implemented, tested with a simulated daemon, and exercised successfully on
 the owner's Docker stack. D35 is implemented for unconfirmed command outcomes;
-reconciliation remains Phase 3. The initial timing defaults remain unchanged.
+the Phase 3 reconciliation command handles validated pending records. The initial timing defaults still apply.
 
 | ID | Choice | Reason and consequence |
 |---|---|---|
@@ -210,3 +200,38 @@ infrastructure platform, rollback mode or application feature is introduced.
   It changes no deployment behavior and adds no dependency. Study documents
   remain outside the repository; a selected-trade-offs document is deferred
   until the end of the project, if the owner wants it.
+
+## Phase 3 Batch A — recovery target and eligibility
+
+Phase 2 merged at `e960f68`. These two owner-selected rules define the Phase 3 design. Batch B implements the manual path. The owner's live exercise verified target
+selection, the comment-only exception and real environment-change refusal.
+
+| ID | Decision | Alternative and cost |
+|---|---|---|
+| D42 | Manual rollback selects a verified successful operation by full ID and repeats eligibility checks before mutation. | Implicitly selecting the preceding success is quicker, but repeated verification and deployment can make the intended target ambiguous. Showing release, time and image alongside the operation ID helps the operator choose. |
+| D43 | Manual rollback may explicitly accept changed base Compose file bytes only when the entire supported resolved base model and all independent compatibility evidence still match. Automatic recovery stays strict. | Strict-only refusal is simpler but blocks comment edits. A general force flag could accept a changed credential or dependency. The narrow exception adds evidence collection, comparison and tests. Legacy records require fresh verification before a new eligible baseline can exist. |
+
+See the [Phase 3 recovery contract](PHASE-3-RECOVERY.md) for the decision table, secret handling and required evidence.
+
+## Phase 3 Batch B implementation choices
+
+| Choice | Reason | Cost |
+|---|---|---|
+| Register an already running release through an explicit `baseline` command and `--schema catalogue-v1`. | The operator identifies the trusted image and its intended database contract. The toolkit verifies it and inspects the actual schema. | An ordinary deployment or an older success needs a fresh verification before it can serve as a recovery target. |
+| Keep a signed compatibility snapshot in the successful operation record. | Pending intent, exception use and final result remain associated with one operation. | Loss of the local key invalidates its comparisons. |
+| Accept the shipped Compose source plus a small set of formatting changes. | This bounds which external inputs can affect recovery while using the installed Compose renderer to check the complete model. | Some equivalent YAML rewrites require review and a toolkit change. |
+
+## Phase 3 combined batch decisions
+
+D05, D06, D35, D42 and D43 establish the policy. The implementation choices
+below define the command interface and the evidence required to act.
+
+| ID | Selected behavior | Reason and cost |
+|---|---|---|
+| D44 | Preview by full pending operation ID. Require explicit closure as `closed-unknown` under the lock. | A present-day observation cannot establish whether an interrupted operation completed. The operator must confirm that Docker work has settled. |
+| D45 | Repair a generated override when it points at the image named in a recorded pending replacement and the observed API belongs to this checkout. | A process can exit after saving the override. The repair changes a local file and requires stable resource observations. Unexplained mismatches and corrupt history require investigation. |
+| D46 | Require both `--auto-recover` and `--schema catalogue-v1`. Use the last recorded success only, reverify it live and require a distinct candidate image. | A recorded success may be stale. One eligible running release makes the target predictable. Older eligible entries remain available through explicit manual selection. |
+| D47 | Record the confirmed candidate failure before one separately journaled recovery attempt under the same lock. Require the same observed container ID and start time. | The deployment failure survives recovery. If the process stops between the two records, an operator must decide what to do next. |
+| D48 | Repeat strict compatibility checks after rendering the stored plan, then confirm the current API before submitting the replacement. Save evidence after verified success. | Runtime settings and the selected release must still agree. Additional inspection can refuse a target and adds time before deployment. |
+| D49 | Keep exit code `1` for a failed requested deployment even when automatic recovery succeeds. | A caller can detect the failed release. Operators can read the recovery record for the restored service outcome. |
+| D50 | Use version 4 records for explicit unknown closure and automatic deployment/recovery links. | Old records remain readable in the new toolkit. Older readers can refuse a newer snapshot. Recovery history checks the links between automatic operations. |

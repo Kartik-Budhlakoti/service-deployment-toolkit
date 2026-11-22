@@ -9,6 +9,15 @@ class InspectionError(RuntimeError):
     pass
 
 
+def unique_object(pairs):
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError("Duplicate JSON field")
+        result[key] = value
+    return result
+
+
 class Docker:
     """Read-only commands against the explicitly selected local default context."""
 
@@ -35,7 +44,7 @@ class Docker:
 
     def json(self, *arguments):
         try:
-            return json.loads(self.text(*arguments))
+            return json.loads(self.text(*arguments), object_pairs_hook=unique_object)
         except (ValueError, RecursionError):
             raise InspectionError("Docker returned malformed JSON") from None
 
