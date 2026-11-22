@@ -12,10 +12,10 @@ from .override import read_override
 from .state import StateUncertain, _check_record, _read_json, read_state, state_directory
 
 
-def history(root):
+def history(root, *, allow_pending=False):
     state = read_state(root)
     latest = state["latest"]
-    if latest and latest["status"] == "pending":
+    if latest and latest["status"] == "pending" and not allow_pending:
         raise StateUncertain("Pending operation requires inspection")
     records = {}
 
@@ -41,7 +41,30 @@ def history(root):
                 add(record)
     except (OSError, ValueError, TypeError, RecursionError):
         raise StateUncertain("Invalid archived operation") from None
+    check_automatic_history(records)
     return records
+
+
+def check_automatic_history(records):
+    triggers = set()
+    for record in records.values():
+        planned = record.get("auto_target")
+        if planned:
+            baseline = records.get(planned)
+            if not baseline or baseline["status"] != "succeeded" or not baseline.get("evidence"):
+                raise StateUncertain("Automatic deployment history is missing its verified baseline")
+            if baseline["image_id"] == record["image_id"]:
+                raise StateUncertain("Automatic deployment history has a matching candidate and baseline image")
+        recovery = record.get("recovery", {})
+        trigger_id = recovery.get("trigger")
+        if trigger_id is None:
+            continue
+        trigger, target = records.get(trigger_id), records.get(recovery["target"])
+        if (trigger_id in triggers or not trigger or trigger["status"] != "failed"
+                or trigger.get("auto_target") != recovery["target"] or not target
+                or target["image_id"] != record["image_id"] or target["release"] != record["release"]):
+            raise StateUncertain("Automatic recovery history has a missing or conflicting operation link")
+        triggers.add(trigger_id)
 
 
 def evidence(key, operation, image, release, snapshot):
@@ -82,11 +105,11 @@ def differences(saved, current, allow):
     raise InspectionError("Recovery evidence differs: " + ", ".join(sorted(changed)))
 
 
-def inspect_target(root, docker, record, allow):
+def inspect_target(root, docker, record, allow, settings=None):
     key = comparison_key(root)
     saved = authenticate(record, key)
     read_inputs(root, docker)
-    request = DeploymentRequest(record["image_id"], record["release"], Settings())
+    request = DeploymentRequest(record["image_id"], record["release"], settings or Settings())
     preflight = inspect_preflight(request, root, docker)
     require(preflight["candidate_image_id"] == request.image, "Selected immutable local image is unavailable")
     read_override(root)

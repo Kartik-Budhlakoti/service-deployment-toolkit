@@ -16,7 +16,8 @@ from toolkit.checks import Verification
 from toolkit.config import DeploymentRequest, Settings
 from toolkit.deploy import deploy
 from toolkit.docker import InspectionError
-from toolkit.override import read_override
+from toolkit.override import override_path, read_override
+from toolkit.preflight import LABEL
 from toolkit.processes import CommandError
 from toolkit.recovery import authenticate, history, read_only
 from toolkit.state import CHECK_NAMES, RecordError, operation_session, read_state, state_directory
@@ -29,7 +30,7 @@ PASS = Verification(dict.fromkeys(CHECK_NAMES, True), 1)
 RENDERER_IDENTITY = compat.renderer_identity
 
 
-class RecoveryTests(unittest.TestCase):
+class RecoveryFixture(unittest.TestCase):
     def setUp(self):
         temp = tempfile.TemporaryDirectory()
         self.addCleanup(temp.cleanup)
@@ -52,6 +53,7 @@ class RecoveryTests(unittest.TestCase):
         self.api = d.items[0]
         for item in d.items:
             item["Config"].update(User="10001:10001", Env=[])
+            item["HostConfig"]["RestartPolicy"] = {"Name": "no", "MaximumRetryCount": 0}
         self.api["Config"]["Env"] = ["DB_HOST=db", "DB_USER=catalogue_reader",
                                      "DB_NAME=catalogue", "DB_PASSWORD=" + SECRET]
         self.api["HostConfig"].update(ReadonlyRootfs=True, CapDrop=["ALL"],
@@ -99,6 +101,21 @@ class RecoveryTests(unittest.TestCase):
         self.run.assert_not_called()
         return read_state(self.root)["latest"]["id"]
 
+    def replace_api(self, image, *, running=True):
+        members = self.docker.network["Containers"]
+        members.pop(self.api["Id"], None)
+        # Assign a new valid ID and keep the dependency IDs stable.
+        self.api["Id"] = f"{int(self.api['Id'], 16) + 1:064x}"
+        self.api["Image"] = image
+        self.api["State"].update(Status="running" if running else "exited", Running=running)
+        self.api["Config"]["Labels"][LABEL + "project.config_files"] = (
+            f"{self.root / 'compose.yaml'},{override_path(self.root)}"
+        )
+        if running:
+            members[self.api["Id"]] = {}
+
+
+class RecoveryTests(RecoveryFixture):
     def test_baseline_preview_and_list(self):
         op = self.baseline()
         before = {p.name: p.read_bytes() for p in self.directory.iterdir()}
@@ -134,7 +151,7 @@ class RecoveryTests(unittest.TestCase):
             self.assertEqual(read_state(self.root)["latest"]["status"], "pending")
             self.assertIn("--profile", args)
             self.assertEqual(args[-1], "api")
-            self.api["Image"] = IMAGE
+            self.replace_api(IMAGE)
         self.run.side_effect = replace
         self.assertEqual(deploy(root=self.root, target=op), 0, self.out.getvalue())
         self.run.assert_called_once()

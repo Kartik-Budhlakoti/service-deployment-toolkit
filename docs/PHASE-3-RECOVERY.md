@@ -10,7 +10,7 @@ The operator can preview the decision with `rollback --to <operation-id> --dry-r
 
 ## One exception for manual use
 
-Default rollback requires equality of both the recorded base Compose file bytes and its fully resolved model, plus the independent evidence below. With explicit `--allow-equivalent-config`, manual rollback may waive only base Compose *byte* equality. The complete supported base model and every other guard must still match. Automatic recovery always uses the strict rule. An unconfirmed replacement or pending record goes to reconciliation.
+Default rollback requires equality of both the recorded base Compose file bytes and its fully resolved model, plus the independent evidence below. With explicit `--allow-equivalent-config`, manual rollback may waive only base Compose *byte* equality. The complete supported base model and every other guard must still match. Automatic recovery uses the strict rule. An unconfirmed replacement or pending record goes to reconciliation.
 
 | Observation relative to the selected success | Strict | Manual with flag |
 |---|---|---|
@@ -134,7 +134,7 @@ Compose file before another attempt. A failed or interrupted run can leave v2
 running or an operation pending.
 
 The planned Batch B owner-side live exercise passed on 22 November 2026.
-Reconciliation and automatic rollback remain later work.
+See the [combined live results](#combined-live-results) for the later exercises.
 
 ### Assistant verification
 
@@ -203,3 +203,182 @@ startup, hard interruption, live recording failure and automatic recovery were
 not exercised in this run. The interruption and recording-failure unit cases
 use simulated Docker. The results make no availability-duration or zero-downtime
 claim. Later batches retain their acceptance requirements.
+
+## Combined Batches C–E
+
+This batch adds reconciliation and automatic recovery. The owner ran the full
+combined acceptance script on the dedicated Docker demo. The
+[live results](#combined-live-results) record the tested scenarios and limits.
+
+### C. Reconcile a pending operation
+
+Use `status` to find the full pending ID. Preview with:
+
+```bash
+python -m toolkit reconcile --operation PENDING_OPERATION_ID
+```
+
+Preview shows the intended image and the current owned API container, image
+and running state. If its ID or metadata cannot be validated, the command
+refuses. Compare the preview with your operator observations. Confirm Docker
+or another operator has finished any outstanding work before requesting closure:
+
+```bash
+python -m toolkit reconcile --operation PENDING_OPERATION_ID --close-unknown
+```
+
+Closure rechecks the exact pending operation and compares two resource
+observations under the mutation lock. It can repair the local generated
+override in one specific interruption window. The owned API still uses one
+image, and the stored override points to the image named in the pending
+replacement. The record must identify its action as `replace`. A legacy
+record without an action can be closed when the current override is consistent.
+After repair, the toolkit verifies the alignment again. A retry
+can finish closure after an earlier repair if the pending journal record remains
+valid. A missing or corrupt journal requires investigation.
+
+Closure records `closed-unknown` with the observed API ID, image and running
+state. It preserves the original requested release, image and operation ID.
+The previous verified success still refers to its original operation. The
+command issues Docker inspection calls and can write the local override and
+journal. It does not run Compose `up`, stop services, or verify HTTP behavior.
+The observation and the lock cannot establish whether submitted daemon work
+has finished. Once closed, normal preflight and the recovery checks apply to
+any next operation.
+
+### D. Deploy with optional automatic recovery
+
+The default deploy command keeps a failed candidate available for inspection or
+explicit manual rollback. To opt in, declare the existing catalogue schema
+contract with the flag:
+
+```bash
+python -m toolkit deploy --image LOCAL_CANDIDATE_IMAGE --release EXPECTED_RELEASE \
+  --auto-recover --schema catalogue-v1
+```
+
+Use a trusted local candidate compatible with `catalogue-v1`. The most recent
+recorded success must refer to the running API and have valid signed recovery
+evidence. A strictly eligible Batch B baseline can qualify. The toolkit
+rechecks the baseline across all five groups before replacing the API.
+Register the running release again when the newest success lacks compatibility
+evidence or the supported environment has since changed. For example, a flagged
+rollback during the Batch B comment test captured the file bytes with that
+comment. A fresh baseline after the comment is removed captures the current
+bytes. Automatic recovery requires a different candidate image and uses no
+Compose byte exception. No older record is selected automatically.
+
+Both replacement plans render the stored image-only override against the full
+base model. After that render, the toolkit checks compatibility again before
+submitting the operation. The checks also require the actual API, DB and NGINX
+restart policy to match the supported default. If the candidate passes full
+verification and its inputs remain stable, the new success includes recovery
+evidence and can serve as a future strict baseline. Ordinary deploy operations
+continue to use the original verification record.
+
+After Compose returns, the toolkit must observe the intended replacement.
+If it cannot confirm that API, the pending operation requires reconciliation.
+It binds verification to the observed API container ID and start time. If
+verification fails, the recorded candidate failure comes first. Under the same
+lock, the toolkit checks that the same API instance remains current and the
+baseline still meets the strict compatibility checks. The baseline
+image must still be local. A refused second check leaves the deployment failed
+and reports why recovery was skipped. Eligible recovery gets a separate pending
+record referring to the baseline and the failed deployment. The API replacement,
+verification and final recording run once. Neither a timeout or unconfirmed
+command, nor a failure to record the deployment result, triggers automatic
+recovery. A crash between the two operations can leave the recorded failure
+without a recovery attempt.
+
+| Situation | Exit | Journal outcome |
+|---|---:|---|
+| Candidate verifies | 0 | Successful candidate. |
+| Candidate fails verification and recovery is skipped | 1 | Failed candidate with its planned baseline ID. The skip reason is printed. |
+| Candidate fails and recovery verifies | 1 | Failed candidate and a separate successful recovery linked to it. |
+| Candidate fails and recovery fails verification | 1 | Failed candidate and a separate failed recovery. Prior success stays recorded. |
+| Initial checks refuse the opted-in deployment | 4 | No replacement request or new deployment operation. |
+| Another toolkit operation holds the lock | 5 | Existing state remains authoritative. |
+| A replacement command is unconfirmed | 6 | Pending intent for the uncertain operation, with bounded observations when possible. |
+| A required record or override cannot be saved | 7 | Recording failure. Inspect the journal and current service. |
+| Operator interrupts the toolkit | 130 | Inspect status. Any outstanding operation remains pending. |
+
+Version 4 records carry the selected automatic baseline, the recovery trigger
+or the reconciliation observation. Recovery history validates linked automatic
+records before selection. The reader also accepts versions 1–3. Preserve the
+journal and use the current reader to interpret it.
+
+### Combined batch live acceptance
+
+Run from the repository root with the already initialized, dedicated Phase 1
+image running as `demo-v1`. Resume existing containers with the README procedure
+if they stopped after reboot. Confirm the patch and the local unit suite first.
+
+```bash
+python scripts/phase3-final-acceptance.py
+```
+
+The script builds a separate local test image from the selected demo files in
+an isolated temporary directory.
+Its API process starts, waits four seconds and exits before serving HTTP.
+The build uses the project's pinned base and lock. It may need downloads if
+the base or dependencies are absent from the build cache. Keep other toolkit
+commands and Compose file edits idle during this exercise. The API is briefly
+unavailable while the failure path is exercised.
+
+- The reconciliation stage exits the toolkit at two controlled points. First
+  it exits before sending the replacement, and closure preserves the original
+  API. Then it exits after Compose returns but before verification is recorded.
+  Closure preserves the replacement until an explicit rollback restores v1.
+  Both cases test the pending gate, preview and preservation of the prior success.
+- The automatic stage verifies that strict opt-in preflight refuses a temporary
+  Compose comment, then restores the original file. It deploys the failing
+  candidate in default mode and checks that it remains the current stopped API
+  until strict manual rollback restores v1. Finally, opted-in deployment of the
+  same candidate should fail, recover once to v1, and return exit `1`. The script
+  checks the linked records, dependency IDs and both HTTP routes.
+
+The script returns zero after all its checks pass. The expected candidate
+deploy exit `1` is checked inside the script. The stages can also run separately
+with `--stage reconcile` or `--stage automatic`. If the script stops early or
+is interrupted, inspect `python -m toolkit status` and the Compose file before
+another mutation. Keep any pending state and any produced candidate image for
+diagnosis. A hard interruption during the temporary comment test can leave
+that comment in the source file.
+
+### Combined batch verification
+
+The reviewed patch passed 214 tests on Python 3.14.10 in normal and optimized modes
+with warnings treated as errors. The dependency check passed. The tests include
+real local journal writes, locking, controlled state changes and simulated
+Docker. They cover closure and override alignment, the strict baseline gate,
+candidate verification failure, successful and failed recovery, missing targets,
+resource drift, ambiguous Docker completion and recording failures. Regression
+checks cover API replacement by the same image, a changed process start, schema
+drift during rendering, a missing automatic history link and a legacy override
+mismatch that cannot be attributed to a recorded replacement.
+
+A scratch integration run executed the acceptance driver through the real CLI
+and subprocess runner, the Compose 5.7.1 renderer, and both loopback HTTP
+routes with simulated container metadata and Docker mutations. It also tested
+a local replacement-command timeout and reconciliation.
+
+### Combined live results
+
+On 22 November 2026, the owner ran the reviewed C–E change based on `99834be`
+on the existing EndeavourOS Docker demo. After the test-only `/proc` fix, all
+214 tests passed in normal and optimized Python with warnings treated as errors.
+The development environment passed `pip check`. Before the acceptance run, the
+read-only preflight and both HTTP smoke routes passed on the running `demo-v1`.
+
+| Exercise | Observed result |
+|---|---|
+| Toolkit exited before submitting replacement | Pending operation `6581b99f412e4d439059b24b4e819898` blocked a new deployment. Preview identified the generated override mismatch. Explicit closure aligned it to the original API and preserved the prior success and container ID. |
+| Toolkit exited after Compose returned | Pending operation `ae2f8de22e0146e4b34cf7c5642c3682` blocked a new deployment. The test checked that the candidate exited with code `42`. Closure kept the exited candidate in place until strict manual rollback verified v1. |
+| Temporary Compose comment | Strict opt-in preflight refused with `compose_bytes` as the reason. The script checked that the journal and resources had stayed the same, then restored the original file bytes. |
+| Failed candidate with default deploy | Operation `3958530b7c0848b79f0b6a9eaf8344b7` recorded failure and left the stopped candidate in place. Strict manual rollback `dc8fe1ad0d874d9cac7e7e22afe458cc` verified v1. |
+| Failed candidate with automatic recovery enabled | Deployment `81c2a7e791f34b5ba26514a72f35e1a2` remained failed and returned exit `1`. One linked recovery, `b6eeb3ce9c7d4710b55ff94a9828b190`, targeted the last verified v1 record and passed all five verification groups. |
+| Final status | The script checked that the database and NGINX container IDs were retained. Status showed a successful recovery to `demo-v1` with all three containers running, and both smoke routes passed. |
+
+The acceptance script completed both stages. These are local results from a
+controlled demo. Daemon interruption during replacement, a live filesystem
+write failure and downtime measurements remain outside the recorded run.

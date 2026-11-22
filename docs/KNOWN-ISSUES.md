@@ -1,12 +1,9 @@
 # Known Issues and Limitations
 
-Phase 2 merged at `e960f68`. Phase 3 Batch B implements manual recovery on the
-dedicated demo. On 22 November 2026, the owner's 180 tests passed in both modes
-and the planned live baseline and flagged manual rollback exercise passed.
-The exercise deployed a healthy v2 before restoring the selected v1. Live
-recovery after candidate startup failure, command interruption or final record
-failure remains unverified. Reconciliation, automatic recovery, detailed
-diagnostics and CI remain future work.
+The Phase 3 live exercises passed on the dedicated demo. They covered flagged
+and strict manual rollback, controlled toolkit exits and one opt-in automatic
+recovery after a failed deployment. Detailed diagnostics and CI remain Phase 4
+work. [Phase 3 verification](PHASE-3-RECOVERY.md#combined-live-results)
 
 Recovery evidence is specific to the checkout, comparison key, renderer and
 observed dependencies. Replacing a healthy database or upgrading the Compose
@@ -87,11 +84,16 @@ responses even though unittest reported OK. Fix 1 closes the error response;
 regression tests check closure. Both corrected owner test runs passed without
 the reported warnings. An OK line alone was insufficient evidence of clean tests.
 
+### F06 — Process exit during a test read of `/proc`
+
+One optimized test run raised `ProcessLookupError` while reading the status of
+a child process after cleanup. The process can exit between opening and reading
+its `/proc` file. `tests/test_docker.py` now handles that case alongside the
+already handled missing file. The test still fails if the child keeps running.
+All 214 tests passed in both modes after this test-only fix.
+
 ## Current limitations and open verification gaps
 
-- The CLI implements deployment with journal/lock integration and five verification
-  groups. The recorded live owner acceptance passed. Batch B implements manual rollback. Reconciliation, full diagnostic reports
-  and CI remain future work.
 - Deployment repeats targeted ownership checks under its lock. Manual Compose
   commands bypass these checks and can invalidate local operation history.
 - The demo targets one Linux host and one known workload. It has no authentication,
@@ -130,13 +132,14 @@ write access. Pip's root warning during image construction does not mean the API
 runs as root: the Dockerfile selects user `10001:10001` for execution. This is a
 configuration fact, not a comprehensive container-security audit.
 
-## Boundaries for the planned toolkit
+## Toolkit boundaries
 
-- Rollback will restore an application image, not database contents,
-  configuration changes, or unavailable dependencies.
+- Rollback restores the application image. The database contents, configuration
+  and dependencies require separate operations.
 - A previously successful release may fail under changed external conditions.
 - Persistent storage is not a backup. Database backup and restore are out of scope.
-- Automatic recovery will require explicitly supported compatibility conditions.
+- Automatic recovery requires explicit opt-in and a strictly compatible
+  running baseline before deployment.
 - The implemented per-checkout lock coordinates participating toolkit processes,
   not external Docker commands or other checkouts.
 - Local operation records are not tamper-proof audit records.
@@ -192,7 +195,7 @@ Do not interpret this patch as proof of live deployment interruption handling.
   states; no continuous-health or zero-downtime guarantee is made.
 - Command failures, including nonzero results after partial work, conservatively
   retain pending intent. A healthy observation after timeout is not proof of a
-  settled operation. There is no safe reset/reconcile command in this phase.
+  settled operation. This was a Phase 2 limitation. Phase 3 can explicitly close a valid pending record as unknown.
 - Overall deployment time includes preflight commands, replacement, verification
   and cleanup. The verification setting is not a total deployment timeout.
 - The command runner is Linux-specific (process groups and waitid). It cannot
@@ -207,3 +210,23 @@ Do not interpret this patch as proof of live deployment interruption handling.
   before begin and read-only commands are not persistent deployment operations.
 - New version-2 snapshots require the initialization marker. Legacy version-1
   records remain readable. This is local history, not durable backup storage.
+
+## Reconciliation and automatic recovery limits
+
+- A stable pair of observations does not prove that work already submitted to
+  the Docker daemon has settled. Confirm that separately before closing a pending
+  record. A closure preserves the uncertainty about the original command result.
+- Missing containers, unsupported ownership, invalid journal data and unexplained
+  override mismatches can prevent closure. Restore the supported stack conditions
+  and preserve the journal for diagnosis.
+- The automatic path requires a strictly eligible running baseline before any
+  candidate replacement. A Docker command error retains pending intent. A failed
+  verification that is recorded before the process stops can remain unresolved
+  by recovery when the process stops between operations.
+- An older toolkit checkout can refuse a version 4 journal. Use the current
+  toolkit to inspect it. The journal remains local and can be lost if its entire
+  directory is removed.
+- The live acceptance script schedules controlled exits before submitting a
+  replacement and after Compose returns, before the toolkit records the result.
+  It also builds a candidate that exits before serving HTTP. A daemon interruption
+  during replacement and a live filesystem write failure require separate evidence.

@@ -6,9 +6,16 @@ from .config import ConfigurationError, DeploymentRequest, ExitCode, Settings
 from .docker import InspectionError
 from .deploy import deploy
 from .compatibility import CONTRACT
+from .reconcile import reconcile
 from .recovery import read_only
 from .preflight import inspect_preflight, inspect_status
 from .state import StateUncertain, read_state
+
+
+def operation_id(value):
+    if not re.fullmatch("[0-9a-f]{32}", value):
+        raise argparse.ArgumentTypeError("expected a full operation ID of 32 lowercase hexadecimal characters")
+    return value
 
 
 def build_parser():
@@ -24,19 +31,29 @@ def build_parser():
     )
     commands.add_parser("targets", help="List successful records and strict recovery eligibility.", allow_abbrev=False)
     rollback = commands.add_parser("rollback", help="Recover an explicitly selected verified release.", allow_abbrev=False)
-    rollback.add_argument("--to", required=True, metavar="OPERATION_ID")
+    rollback.add_argument("--to", type=operation_id, required=True, metavar="OPERATION_ID")
     rollback.add_argument("--dry-run", action="store_true")
     rollback.add_argument("--allow-equivalent-config", action="store_true",
                           help="Allow only an equivalent supported representation of the base Compose file.")
+    pending = commands.add_parser("reconcile", help="Inspect or explicitly close a pending operation.",
+                                  allow_abbrev=False)
+    pending.add_argument("--operation", type=operation_id, required=True, metavar="OPERATION_ID")
+    pending.add_argument("--close-unknown", action="store_true",
+                         help="Confirm Docker work has settled and close the record with its outcome unknown.")
     for command, description in (
         ("validate", "Validate deployment inputs without contacting Docker."),
         ("preflight", "Inspect the candidate image and existing demo resources without changing them."),
         ("baseline", "Verify the running release and record its declared schema contract."),
-        ("deploy", "Deploy or verify a local image; no automatic rollback."),
+        ("deploy", "Deploy or verify a local image. Automatic recovery requires explicit opt-in."),
     ):
         child = commands.add_parser(command, help=description, allow_abbrev=False)
         if command == "baseline":
             child.add_argument("--schema", required=True, choices=(CONTRACT,))
+        if command == "deploy":
+            child.add_argument("--auto-recover", action="store_true",
+                               help="Try once to restore the verified running baseline after a confirmed failure.")
+            child.add_argument("--schema", choices=(CONTRACT,),
+                               help="Declare the candidate's schema contract for automatic recovery.")
         child.add_argument("--image", required=True, help="Explicit local tag, digest or full image ID.")
         child.add_argument("--release", required=True, help="Expected /version release string.")
         child.add_argument("--verification-timeout", type=int, default=60, metavar="SECONDS")
@@ -52,11 +69,11 @@ def main(argv=None):
     if args.command == "targets":
         return read_only()
     if args.command == "rollback":
-        if not re.fullmatch("[0-9a-f]{32}", args.to):
-            parser.error("--to requires one full recorded operation ID (32 lowercase hexadecimal characters)")
         if args.dry_run:
             return read_only(args.to, args.allow_equivalent_config)
         return deploy(target=args.to, allow=args.allow_equivalent_config)
+    if args.command == "reconcile":
+        return reconcile(args.operation, close=args.close_unknown)
     if args.command == "status":
         state_code = ExitCode.OK
         try:
@@ -79,6 +96,14 @@ def main(argv=None):
                     meta = latest["recovery"]
                     print(f"RECOVERY: {meta['kind']} target={meta['target']} "
                           f"exception_requested={meta['requested']} exception_needed={meta['needed']}")
+                    if "trigger" in meta:
+                        print(f"AUTOMATIC RECOVERY FOR: {meta['trigger']}")
+                if "auto_target" in latest:
+                    print(f"AUTOMATIC RECOVERY BASELINE: {latest['auto_target']}")
+                if "reconciliation" in latest:
+                    observation = latest["reconciliation"]
+                    print(f"RECONCILIATION OBSERVED: image={observation['image_id']} "
+                          f"api={observation['api_id']} running={observation['running']}")
             success = state["last_success"]
             if success is not None:
                 print(f"LAST RECORDED SUCCESS: release={success['release']} image={success['image_id']}")
@@ -107,6 +132,10 @@ def main(argv=None):
     if args.command == "baseline":
         return deploy(request, baseline=True)
     if args.command == "deploy":
+        if args.auto_recover != (args.schema is not None):
+            parser.error("--auto-recover and --schema catalogue-v1 must be supplied together")
+        if args.auto_recover:
+            return deploy(request, auto_recover=True)
         return deploy(request)
     if args.command == "preflight":
         try:

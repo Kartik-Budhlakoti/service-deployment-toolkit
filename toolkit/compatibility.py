@@ -165,14 +165,14 @@ def renderer_identity(docker):
     return identity
 
 
-def observe(root, docker, key, image, *, plan=True):
+def observe(root, docker, key, image, *, plan=True, pending_image=None):
     raw, env, proxy = read_inputs(root, docker)
     model = docker.compose("config", "--format", "json")
     try:
         if plan:
             check_plan(docker, root, model, image)
         services = model["services"]
-        current = check_resources(containers(docker), root)
+        current = check_resources(containers(docker), root, pending_image=pending_image)
         for name in ("api", "db", "nginx"):
             item = current[name]
             defaults = single(docker.json("image", "inspect", item["Image"]), "running service image")["Config"]
@@ -180,6 +180,9 @@ def observe(root, docker, key, image, *, plan=True):
             expected_env.update(services[name].get("environment", {}))
             require(parse_environment(item["Config"]["Env"]) == expected_env,
                     "Running service environment differs from Compose and its image")
+            restart_policy = item["HostConfig"]["RestartPolicy"]
+            require(restart_policy.get("Name") in ("", "no") and restart_policy.get("MaximumRetryCount") == 0,
+                    "Unexpected container restart policy")
             for field in ("Cmd", "Entrypoint", "User"):
                 require((item["Config"].get(field) or None) == (defaults.get(field) or None),
                         "Running service command or identity differs from its image")
