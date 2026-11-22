@@ -124,6 +124,8 @@ class AutomaticRecoveryTests(RecoveryFixture):
         self.assertEqual(first["routes"]["direct_items"], "connection-refused")
         self.assertEqual(report["automatic_recovery"]["id"], final["id"])
         self.assertEqual(report["automatic_recovery"]["outcome"], "succeeded")
+        # This fixture owns a temporary checkout. Require regeneration from the journal.
+        path.unlink()
         self.assertEqual(main(["report", "--operation", final["id"]]), 0)
         self.assertEqual(list(folder.iterdir()), [path])
         self.assertEqual(json.loads(path.read_bytes()), report)

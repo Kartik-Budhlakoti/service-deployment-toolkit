@@ -209,6 +209,9 @@ boundaries are not a security sandbox.
 5. Release: clean-install verification, CI evidence, demonstration, and accurate
    documentation.
 
+The [diagnostic exercises](PHASE-4-VERIFICATION.md) cover stopped dependencies
+and connect a failed candidate to its automatic recovery report.
+
 Tests and documentation develop alongside each phase. Local Phase 1 results
 are recorded in [Known issues and limitations](KNOWN-ISSUES.md).
 

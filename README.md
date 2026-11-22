@@ -163,4 +163,5 @@ uses the dedicated demo and intentionally interrupts the API.
 - [Limitations and observed issues](docs/KNOWN-ISSUES.md)
 - [Deployment verification](docs/PHASE-2-VERIFICATION.md)
 - [Recovery verification](docs/PHASE-3-RECOVERY.md)
+- [Reproduce a database outage, proxy outage and failed-release report](docs/PHASE-4-VERIFICATION.md)
 - [MIT license](LICENSE)

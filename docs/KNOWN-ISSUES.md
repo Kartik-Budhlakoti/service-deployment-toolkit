@@ -257,3 +257,9 @@ A previously exported file can be stale after interruption. Regenerate it by
 operation ID once the journal is readable. The report contains operation,
 image and container identifiers and timestamps. Review those identifiers
 before sharing it. Reports give observations rather than a proven root cause.
+
+The Phase 4 outage driver exercises one stopped dependency at a time. An
+external Docker command can still race with the driver. Worker timeouts and
+skipped requests leave gaps in the diagnostic record. The verification guide
+lists the separate smoke checks and the recovery procedure if a stage is
+interrupted. [Phase 4 exercises](PHASE-4-VERIFICATION.md)
