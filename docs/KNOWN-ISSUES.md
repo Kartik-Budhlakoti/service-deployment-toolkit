@@ -230,3 +230,16 @@ Do not interpret this patch as proof of live deployment interruption handling.
   replacement and after Compose returns, before the toolkit records the result.
   It also builds a candidate that exits before serving HTTP. A daemon interruption
   during replacement and a live filesystem write failure require separate evidence.
+
+## Diagnostic limits
+
+The four observations are sequential. A connection to port 5432 shows that a
+listener accepted it. PostgreSQL authentication and queries are exercised
+separately through the catalogue requests. The name check uses the container's
+system resolver, which may also consult a hosts file. This demo checks IPv4.
+
+A removed container or a checkout/override mismatch can prevent inspection.
+An exited API cannot run the two internal probes. If the Docker exec or HTTP
+worker fails to return a recognized result, the command reports
+`probe-unavailable`. A changed or unconfirmed final snapshot makes the overall
+run incomplete. These observations alone cannot identify every root cause.

@@ -235,3 +235,14 @@ below define the command interface and the evidence required to act.
 | D48 | Repeat strict compatibility checks after rendering the stored plan, then confirm the current API before submitting the replacement. Save evidence after verified success. | Runtime settings and the selected release must still agree. Additional inspection can refuse a target and adds time before deployment. |
 | D49 | Keep exit code `1` for a failed requested deployment even when automatic recovery succeeds. | A caller can detect the failed release. Operators can read the recovery record for the restored service outcome. |
 | D50 | Use version 4 records for explicit unknown closure and automatic deployment/recovery links. | Old records remain readable in the new toolkit. Older readers can refuse a newer snapshot. Recovery history checks the links between automatic operations. |
+
+## Phase 4 diagnostic collection
+
+| ID | Decision | Reason and cost |
+|---|---|---|
+| D51 | Offer one read-only, on-demand command scoped to the owned local demo. | An operator can inspect a healthy or degraded stack using the same four checks. Missing or foreign resources can prevent inspection. |
+| D52 | Check database name resolution and TCP reachability independently from the API container. | Testing the inspected database address separately keeps a name failure distinguishable from a refused connection. The check covers the demo's IPv4 network. |
+| D53 | Bound collection time and print only selected outcomes and elapsed times. | Raw errors can include configuration values. A generic worker failure sometimes leaves the cause unknown. |
+
+Batch A collects terminal observations. The detailed report policy and
+integration with failed operations belong to Batch B.

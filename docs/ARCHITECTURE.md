@@ -291,3 +291,26 @@ failure. Target selection also validates the links between automatic records.
 Version 4 snapshots and records support these outcomes. The current reader also
 accepts versions 1–3. The [Phase 3 contract](PHASE-3-RECOVERY.md) records the
 checks, exit codes and verification status.
+
+## Connectivity diagnostics
+
+The standalone `diagnose` command samples four routes once. Inside the running
+API container it uses the system IPv4 resolver for `db` and compares the result
+with the owned database container's address. It separately opens a TCP connection
+to that address on port 5432. From the host it checks the expected catalogue
+JSON at both loopback URLs with the existing HTTP worker. The TCP probe sends
+no credentials or SQL. Each probe prints a fixed outcome label and elapsed time.
+
+The command inspects the local Docker context and the checkout's three demo
+containers. It checks Compose ownership labels, mounts, port bindings and
+network membership before probing. It samples identities, start times, states
+and addresses again afterwards. Exited services and an unhealthy database can
+be inspected. A probe that requires an exited source or a stopped HTTP target
+is skipped. Deployment preflight keeps its stricter dependency requirements.
+
+The shared work budget is 15 seconds. Each external call gets at most 3 seconds
+from the remaining budget. Local process scheduling and cleanup can add time.
+Exit 0 requires four successful observations and a matching final snapshot.
+Exit 1 means a probe failed, was skipped or was unavailable on a confirmed
+stack. Exit 4 means inspection, ownership, the deadline or final confirmation
+prevented an overall conclusion. An interruption can return 130.

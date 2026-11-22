@@ -3,6 +3,7 @@ import sys
 import re
 
 from .config import ConfigurationError, DeploymentRequest, ExitCode, Settings
+from .diagnostics import diagnose
 from .docker import InspectionError
 from .deploy import deploy
 from .compatibility import CONTRACT
@@ -29,6 +30,7 @@ def build_parser():
         "status", help="Inspect local operation records and observe project containers.",
         allow_abbrev=False,
     )
+    commands.add_parser("diagnose", help="Check connectivity on the local catalogue stack.", allow_abbrev=False)
     commands.add_parser("targets", help="List successful records and strict recovery eligibility.", allow_abbrev=False)
     rollback = commands.add_parser("rollback", help="Recover an explicitly selected verified release.", allow_abbrev=False)
     rollback.add_argument("--to", type=operation_id, required=True, metavar="OPERATION_ID")
@@ -66,6 +68,8 @@ def build_parser():
 def main(argv=None):
     parser = build_parser()
     args = parser.parse_args(argv)
+    if args.command == "diagnose":
+        return diagnose()
     if args.command == "targets":
         return read_only()
     if args.command == "rollback":

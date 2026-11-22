@@ -10,7 +10,7 @@ from unittest.mock import MagicMock, patch
 
 from toolkit.checks import http_check, verify
 from toolkit.config import DeploymentRequest, Settings
-from toolkit.http_probe import ITEMS, probe
+from toolkit.http_probe import ITEMS, observe_http, probe
 
 
 IMAGE = 'sha256:' + 'a'*64
@@ -137,6 +137,15 @@ class HTTPProbeTests(unittest.TestCase):
             with self.subTest(status=status, body=body):
                 self.status, self.payload = status, body
                 self.assertFalse(probe(self.url, 'live', 'demo-v1', 1))
+
+    def test_diagnostic_http_details(self):
+        for status, body, outcome in ((503, b'private fixture', 'http-503'),
+                                      (200, b'{}', 'unexpected-body'),
+                                      (200, b'{', 'invalid-body'),
+                                      (200, b'x' * 65537, 'oversize-body')):
+            with self.subTest(outcome=outcome):
+                self.status, self.payload = status, body
+                self.assertEqual(observe_http(self.url, 'items', '', 2), outcome)
 
     def test_redirect_is_not_followed(self):
         self.status = 302

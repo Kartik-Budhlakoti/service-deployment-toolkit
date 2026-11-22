@@ -76,6 +76,15 @@ docker compose start --wait --wait-timeout 120 db api nginx
 
 The documented smoke script expects the initial `demo-v1` release.
 
+## Diagnose connectivity
+
+Run `python -m toolkit diagnose` from the checkout with the existing demo.
+It checks whether the API can resolve the database name and connect to the
+database port, then reads the catalogue directly and through NGINX. Each line
+shows the route, outcome and elapsed milliseconds. The command prints to the
+terminal and leaves deployment state alone.
+[Diagnostic scope and exit codes](docs/ARCHITECTURE.md#connectivity-diagnostics)
+
 ## Work with releases
 
 Verify the running catalogue and record a compatible recovery baseline:
