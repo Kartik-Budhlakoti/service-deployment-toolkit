@@ -2,8 +2,8 @@
 
 The Phase 3 live exercises passed on the dedicated demo. They covered flagged
 and strict manual rollback, controlled toolkit exits and one opt-in automatic
-recovery after a failed deployment. Detailed diagnostics and CI remain Phase 4
-work. [Phase 3 verification](PHASE-3-RECOVERY.md#combined-live-results)
+recovery after a failed deployment. Phase 4 covers diagnostics and failure reports. Phase 5 covers CI
+evidence and release verification. [Phase 3 verification](PHASE-3-RECOVERY.md#combined-live-results)
 
 Recovery evidence is specific to the checkout, comparison key, renderer and
 observed dependencies. Replacing a healthy database or upgrading the Compose

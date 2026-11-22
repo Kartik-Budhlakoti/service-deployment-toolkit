@@ -4,6 +4,9 @@ Phase 2 merged at `e960f68` after the owner's 153 tests and three live deploymen
 exercises. Phase 3 Batch B implements the manual recovery choices below on
 the recovery branch. The owner's 180 tests passed in both modes and its planned
 live baseline and flagged manual rollback exercise passed on 22 November 2026.
+The combined recovery batch subsequently passed 214 tests in both modes and
+the dedicated live reconciliation and automatic recovery exercises.
+[Phase 3 live results](PHASE-3-RECOVERY.md#combined-live-results)
 
 A separate study document contains the detailed decision inventory and is maintained outside this repository.
 Local Phase 2 evidence is in [PHASE-2-VERIFICATION.md](PHASE-2-VERIFICATION.md).
