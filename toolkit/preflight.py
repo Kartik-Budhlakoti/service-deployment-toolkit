@@ -188,3 +188,31 @@ def inspect_preflight(request, root=None, docker=None):
                 "dependency_ids": {name: selected[name]["Id"] for name in ("db", "nginx")}}
     except (KeyError, TypeError, AttributeError, IndexError):
         raise InspectionError("Docker/Compose metadata has an unsupported or incomplete structure") from None
+
+
+def validate_replacement_config(docker, root):
+    config = docker.compose("config", "--format", "json")
+    try:
+        api = config["services"]["api"]
+        allowed = {"build", "image", "environment", "ports", "networks", "depends_on",
+                   "healthcheck", "read_only", "cap_drop", "security_opt",
+                   "command", "entrypoint"}
+        require(set(api) <= allowed, "Unsupported API deployment configuration")
+        require(api.get("command") is None and api.get("entrypoint") is None,
+                "API command and entrypoint overrides are unsupported")
+        require(api.get("read_only") is True and api.get("cap_drop") == ["ALL"]
+                and api.get("security_opt") == ["no-new-privileges:true"],
+                "Expected API hardening is missing")
+        require(set(api.get("environment", {})) == {"DB_HOST", "DB_NAME", "DB_USER", "DB_PASSWORD"},
+                "Unsupported API environment settings")
+        require(api["environment"]["DB_HOST"] == "db"
+                and api["environment"]["DB_NAME"] == "catalogue"
+                and api["environment"]["DB_USER"] == "catalogue_reader",
+                "Unexpected API database configuration")
+    except (KeyError, TypeError, AttributeError):
+        raise InspectionError("Unsupported API deployment configuration") from None
+
+def require_demo_user(docker, image):
+    candidate = single(docker.json("image", "inspect", image), "candidate image")
+    require((candidate.get("Config") or {}).get("User") == "10001:10001",
+            "Candidate must retain the demo non-root user 10001:10001")

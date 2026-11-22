@@ -1,9 +1,12 @@
 # Architecture
 
-Status: Phase 1 merged. Phase 2 integrates deployment, verification, inspection
-and journal/lock components. At `fa8aaf1`, 153 tests passed on the owner's machine
-in both modes, and all three planned live acceptance stages passed. Phase 2 PR
-closure is in progress. Recovery and reconciliation remain Phase 3 work.
+Phase 2 merged at `e960f68`. The owner's deployment verification covered 153
+tests and three live exercises. Phase 3 Batch B adds manual selection of a
+recorded successful release, compatibility checks and a separately journaled
+recovery attempt. The [recovery contract](PHASE-3-RECOVERY.md) describes the
+input boundary and owner-side live acceptance recorded on 22 November 2026.
+The exercise restored the selected v1 image after deploying v2 and retained
+the database and proxy container identities.
 
 ## Purpose and scope
 
@@ -247,3 +250,18 @@ operation. They cover compose.yaml, .env and the NGINX bind-mounted configuratio
 they are not persisted secret hashes or a general runtime drift detector. External
 Docker commands and file edits can still race with the toolkit. Phase 3 must
 implement the separate cross-release compatibility checks for automatic recovery.
+
+## Manual recovery implementation
+
+`toolkit/compatibility.py` observes the supported input and runtime fields and
+computes keyed comparisons. `toolkit/recovery.py` validates history, selects one
+full operation ID and evaluates eligibility. The existing deployment function
+performs the attempt under the mutation lock and records recovery metadata in
+version 3 state. Version 1 and 2 history stays readable.
+
+The `baseline` command explicitly registers a verified running release and its
+declared catalogue schema contract. The `targets` command lists recorded
+successes with current eligibility reasons. `rollback --to ID --dry-run`
+previews the same eligibility logic used by an actual attempt. Full observations
+before and after successful verification must agree before a new recovery target
+can be recorded. All observations are point-in-time checks.

@@ -1,9 +1,19 @@
 # Known Issues and Limitations
 
-Status: Phase 1 merged. Phase 2 deployment at `fa8aaf1` passed the owner's 153-test
-suite in both modes and all three planned live acceptance stages. Phase 2 PR
-closure is in progress. Rollback, reconciliation, detailed diagnostics and CI
-remain future work. Live timeout/interruption recovery is not established.
+Phase 2 merged at `e960f68`. Phase 3 Batch B implements manual recovery on the
+dedicated demo. On 22 November 2026, the owner's 180 tests passed in both modes
+and the planned live baseline and flagged manual rollback exercise passed.
+The exercise deployed a healthy v2 before restoring the selected v1. Live
+recovery after candidate startup failure, command interruption or final record
+failure remains unverified. Reconciliation, automatic recovery, detailed
+diagnostics and CI remain future work.
+
+Recovery evidence is specific to the checkout, comparison key, renderer and
+observed dependencies. Replacing a healthy database or upgrading the Compose
+plugin can invalidate older targets. A deleted key blocks attempts that depend
+on it. The schema check covers the catalogue columns and primary key. Triggers,
+data history and general application compatibility exceed that check. The
+runtime observations cover the fields listed in the [recovery contract](PHASE-3-RECOVERY.md#batch-b-implementation).
 
 ## Phase 1 verification record (historical)
 
@@ -80,8 +90,8 @@ the reported warnings. An OK line alone was insufficient evidence of clean tests
 ## Current limitations and open verification gaps
 
 - The CLI implements deployment with journal/lock integration and five verification
-  groups. The recorded live owner acceptance passed. Rollback, reconciliation, full
-  diagnostic reports and CI are not implemented.
+  groups. The recorded live owner acceptance passed. Batch B implements manual rollback. Reconciliation, full diagnostic reports
+  and CI remain future work.
 - Deployment repeats targeted ownership checks under its lock. Manual Compose
   commands bypass these checks and can invalidate local operation history.
 - The demo targets one Linux host and one known workload. It has no authentication,

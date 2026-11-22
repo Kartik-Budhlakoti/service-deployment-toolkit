@@ -2,17 +2,19 @@
 
 A local project for checking containerized releases and recovering from failed
 deployments. The CLI validates inputs, inspects resources, and deploys or verifies
-a local API image while recording the outcome. Recovery remains future work.
+a local API image while recording the outcome. The recovery branch adds manual rollback to an explicitly recorded release.
 The demonstration workload is a small FastAPI catalogue, PostgreSQL, and NGINX.
 
 ## Current status
 
-Phase 1 is merged. Phase 2 deployment is implemented and locally verified at
-`fa8aaf1`; the Phase 2 branch is undergoing closure and PR review. All 153 tests
+Phase 2 merged at `e960f68`. Deployment was locally verified at `fa8aaf1`. All 153 tests
 passed in normal and optimized modes on the owner's Python 3.14.10 environment.
 Live exercises covered verification-only, stopped-API replacement, a different
-candidate image, and explicit redeployment of the original image. No rollback
-or reconciliation command exists yet.
+candidate image, and explicit redeployment of the original image. Phase 3 Batch B adds baseline capture, target listing, rollback preview and manual rollback.
+On 22 November 2026, the owner's 180 tests passed in both execution modes.
+Live baseline registration, configuration refusals and flagged manual rollback
+from the separate v2 image to the selected v1 record passed. See the
+[Phase 3 verification record](docs/PHASE-3-RECOVERY.md#owner-verification-on-22-november-2026).
 
 The demo has been exercised on EndeavourOS x86_64 with Python 3.14.10,
 Docker Engine 29.9.3, and Compose 5.7.1. These are tested versions, not a claim
@@ -229,9 +231,18 @@ replace the demo API; they are not part of automatic unit-test discovery.
 
 ## Next phases and boundaries
 
-Phase 2 is ready for final PR review after the closure documentation is applied.
-Phase 3 adds manual rollback and reconciliation; automatic recovery will require
-opt-in and compatibility checks. Recovery and reconciliation are not implemented.
+To register your already running catalogue image for manual recovery, run:
+
+```bash
+python -m toolkit baseline --image sdt-demo-api:phase1 --release demo-v1 --schema catalogue-v1
+python -m toolkit targets
+```
+
+Choose the full ID printed for the intended baseline. Preview with
+`python -m toolkit rollback --to FULL_OPERATION_ID --dry-run`.
+Removing `--dry-run` requests the operation. A different image can briefly
+interrupt the API. See the [recovery contract and live exercise](docs/PHASE-3-RECOVERY.md#batch-b-implementation).
+Reconciliation and opt-in automatic recovery remain scheduled for later batches.
 
 The baseline targets one local stack. It excludes Kubernetes, paid hosting,
 AI classification, database rollback, high availability, and zero-downtime

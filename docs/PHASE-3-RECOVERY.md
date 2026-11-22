@@ -50,3 +50,156 @@ The strict dependency-ID rule can refuse an otherwise equivalent database recrea
 Use isolated fixtures for negative tests and a dedicated demo for live verification. Batch B should prove the comment-only pass and real-change refusal on the supported Compose installation before enabling the exception. If that boundary cannot be implemented reliably, keep the exception unavailable and retain strict manual recovery. Batch C defines reconciliation, Batch D integrates opt-in automatic recovery, and Batch E records owner-side live evidence and prepares the Phase 3 PR.
 
 Sources for Compose behavior: [rendering the project model](https://docs.docker.com/reference/cli/docker/compose/config/) and [environment interpolation precedence](https://docs.docker.com/compose/how-tos/environment-variables/variable-interpolation/).
+
+## Batch B implementation
+
+Run all commands from the project root. The initial baseline must be the running
+image. The operator declares that the selected image belongs to the trusted
+catalogue workload and expects the `catalogue-v1` schema.
+
+```bash
+python -m toolkit baseline --image sdt-demo-api:phase1 --release demo-v1 --schema catalogue-v1
+python -m toolkit targets
+```
+
+Use the complete operation ID shown for the desired success in place of
+`FULL_OPERATION_ID`. A preview reads the local journal and Docker. Each real
+attempt repeats selection, preflight and evidence collection under the existing
+checkout lock. A successful rollback can itself serve as a later target.
+Ordinary Phase 2-style deployments keep their existing journal format.
+
+```bash
+python -m toolkit rollback --to FULL_OPERATION_ID --dry-run
+python -m toolkit rollback --to FULL_OPERATION_ID
+```
+
+For an equivalent Compose edit, add `--allow-equivalent-config` to a manual preview
+or attempt. The journal records the selected target, whether the exception was
+requested and whether the change in bytes required it. A matching running image
+uses verification only. A replacement targets the API alone. The five verification
+groups and final journal write determine success. A pending result blocks another
+attempt. An operator using Docker directly can still change resources between checks.
+
+### What is compared
+
+- The shipped Compose source accepts blank lines, whole-line comments, line-ending
+  changes and trailing whitespace within its supported ASCII syntax. Significant
+  source lines must retain the shipped structure. The entire rendered base model
+  must also match. Includes and additional input files are outside this boundary.
+- Recovery supports the two unquoted password assignments produced by the demo setup.
+  It compares the environment file separately from values resolved by Compose.
+  Shell-supplied values participate in the resolved model. The NGINX file on the
+  host is compared to the file actually visible inside the proxy.
+- The renderer identity includes the reported Compose version and local executable
+  paths, device/inode, size and change time. Preview renders the proposed image
+  override from memory. Replacement also renders the actual stored override. The
+  only permitted model difference is the API image field.
+- Preflight checks ownership, network membership, mounts, ports, dependency images
+  and platform. Recovery additionally checks the expected process user, command,
+  entrypoint and environment from the image and service settings. It checks the API
+  read-only filesystem, cap drop and security option, and the DB writable mount.
+  DB and NGINX container and image IDs, network ID, and volume name, creation time
+  and mountpoint participate in the comparison. Docker local volumes expose no
+  separate immutable volume ID in this projection.
+- A read-only PostgreSQL metadata query expects an ordinary `public.items` table.
+  Its visible columns in order are `id integer NOT NULL` and `name text NOT NULL`,
+  with the primary key on `id`. This check excludes triggers, other constraints,
+  privileges, application semantics and the contents of other tables.
+- A random 32-byte comparison key lives under the ignored journal directory with
+  mode 0600. HMACs bind the successful operation, full image ID and expected release
+  to the evidence. State version 3 carries recovery metadata. Existing version 1
+  and 2 records stay readable. A missing key with existing recovery evidence
+  blocks baseline registration. Key loss calls for operator investigation.
+  Read-only commands never initialize the journal or key. The toolkit assumes a
+  trusted operator and filesystem. Applications that share the same checkout lock
+  cooperate; the key does not protect against a malicious owner.
+
+### Live acceptance on the dedicated demo
+
+First run the baseline and listing above on healthy v1. Supply its full ID and
+the existing, distinct Phase 2 demo-v2 image to the exercise. The script briefly
+appends a comment to the project's Compose file. It restores the original bytes
+on normal completion or a handled failure, and refuses to overwrite an unexpected
+concurrent edit. Keep this file closed for editing during the exercise.
+
+```bash
+python scripts/phase3-manual-acceptance.py --to FULL_OPERATION_ID --candidate LOCAL_DEMO_V2_IMAGE
+```
+
+The exercise checks the strict and flagged previews, then supplies a different
+credential only to a child process and expects refusal. It deploys v2, requests
+manual recovery to the selected v1 record, checks both dependency IDs and runs
+the smoke tests. If it stops partway, inspect `python -m toolkit status` and the
+Compose file before another attempt. A failed or interrupted run can leave v2
+running or an operation pending.
+
+The planned Batch B owner-side live exercise passed on 22 November 2026.
+Reconciliation and automatic rollback remain later work.
+
+### Assistant verification
+
+The final Batch B suite passed all 180 tests on Python 3.14.10 in normal and
+optimized modes, with warnings treated as errors. The existing development lock
+installed successfully and its dependency check passed.
+
+The new tests use temporary files and a simulated Docker daemon. They exercise
+baseline capture, target selection, strict and flagged comparisons, actual code
+paths for journal writes, missing/changed/insecure keys, conflicting archives,
+failed verification, unconfirmed replacement, final record failure and preservation
+of an earlier failed deployment. They check that previews create no journal files
+and that synthetic secret values are absent from captured output and JSON records.
+
+During assistant review, the standalone Compose 5.7.1 binary rendered both the
+in-memory and stored image override with the expected single-field substitution.
+A comment retained the same model. A shell credential override changed the model.
+The metadata SQL was also exercised against PostgreSQL 16.2 in single-user mode,
+where it accepted the intended table and detected changed nullability.
+
+These additional assistant checks used temporary synthetic inputs. A Docker
+daemon was unavailable in the assistant environment. The owner subsequently
+ran the existing 180-test suite and the planned live acceptance script against
+the PostgreSQL 18 demo stack. Those results are recorded below.
+
+### Owner verification on 22 November 2026
+
+The owner supplied terminal results from the existing EndeavourOS x86_64
+environment with Python 3.14.10, Docker Engine 29.9.3 and Compose 5.7.1.
+All 180 tests passed in normal and optimized modes with warnings treated as
+errors. The host virtual environment passed `pip check`.
+
+Initial inspection found the API, PostgreSQL and NGINX containers stopped after
+a system reboot. All three had exit code 0, OOMKilled false and restart policy
+`no`. Preflight and baseline registration refused the stopped dependencies.
+Starting the existing containers with Compose succeeded, followed by passing
+preflight and smoke checks through the direct and proxy routes.
+
+Baseline operation `0560cdf1401e4cfb835d798de89dead5` used verification only and
+recorded the already running `demo-v1` as an eligible target. The target listing
+continued to display older successful records with their missing-evidence reason.
+
+| Exercise | Observed result |
+|---|---|
+| Strict preview of the selected baseline | Eligible with no exception needed. |
+| Append the acceptance script's temporary Compose comment | Strict preview refused because the Compose bytes differed. |
+| Flagged preview with that comment | Eligible with the exception needed. |
+| Supply a different application database credential through the child process environment | Both previews and the flagged manual attempt refused the runtime environment mismatch. |
+| Check state after these refusals | The script's journal and resource snapshot comparisons passed. |
+| Deploy the separate `demo-v2` image | Operation `e5d5b1287999459a92d21ff0591fdca4` replaced the API and passed all five verification groups. |
+| Manually recover to the selected v1 record with the flag | Operation `56a9bbcf541f42959a85bd7b4b5e1e65` replaced the API, passed all five groups and recorded the full selected target ID. |
+| Check exception attribution | The successful rollback recorded both `exception_requested=True` and `exception_needed=True`. |
+| Check dependency identities and restore the Compose file | The script verified that database and NGINX container IDs were retained and the original Compose bytes were restored. |
+| Final strict preview, status and smoke checks | The original baseline was strictly eligible again. Status reported a successful v1 rollback and all three containers running. Both HTTP smoke routes passed. |
+| Final Git checks | `git diff --check` produced no output and the file list matched the 15 Batch B project files. |
+
+The selected images were:
+
+- v1 was `sha256:4504c0f6d58c69eef9e9b31624432c71eca61da9994cf37e7cec56087ef84a4a`.
+- v2 was `sha256:6a42f087ea8ff28db8f47bb5ec030b82471a3dafc006ffa2e0ac2651fbf1cd6c`.
+
+This exercise establishes the recorded manual path on the dedicated demo. It used
+a successfully deployed v2 as the current release before restoring v1. An actual
+strict manual replacement without the exception, recovery from failed candidate
+startup, hard interruption, live recording failure and automatic recovery were
+not exercised in this run. The interruption and recording-failure unit cases
+use simulated Docker. The results make no availability-duration or zero-downtime
+claim. Later batches retain their acceptance requirements.

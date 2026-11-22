@@ -10,6 +10,7 @@ from uuid import uuid4
 
 from .config import ConfigurationError, Settings, validate_release
 from .locking import mutation_lock
+from .docker import unique_object
 
 
 MAX_RECORD_BYTES = 8192
@@ -50,8 +51,26 @@ CHECK_NAMES = ("container", "liveness", "identity", "catalogue", "proxy")
 
 def _check_record(record):
     required = {"id", "status", "image_id", "release", "started_at", "finished_at"}
-    if type(record) is not dict or set(record) not in (required, required | {"action", "checks"}):
+    extended = required | {"action", "checks"}
+    if type(record) is not dict or set(record) not in (required, extended, extended | {"recovery", "evidence"}):
         raise ValueError
+    if "recovery" in record:
+        meta = record["recovery"]
+        if type(meta) is not dict or set(meta) != {"kind", "target", "requested", "needed"}:
+            raise ValueError
+        if type(meta["requested"]) is not bool or type(meta["needed"]) is not bool:
+            raise ValueError
+        if meta["needed"] and not meta["requested"]:
+            raise ValueError
+        if meta["kind"] == "baseline":
+            if meta["target"] is not None or meta["requested"] or meta["needed"]:
+                raise ValueError
+        elif meta["kind"] != "rollback" or not _matches(r"[0-9a-f]{32}", meta["target"]):
+            raise ValueError
+        if (record["evidence"] is not None) != (record["status"] == "succeeded"):
+            raise ValueError
+        if record["evidence"] is not None and type(record["evidence"]) is not dict:
+            raise ValueError
     if "action" in record:
         if record["action"] not in ("verify-only", "replace"):
             raise ValueError
@@ -94,7 +113,7 @@ def _read_json(path):
         data = file.read(MAX_RECORD_BYTES + 1)
     if len(data) > MAX_RECORD_BYTES:
         raise ValueError
-    return json.loads(data)
+    return json.loads(data, object_pairs_hook=unique_object)
 
 
 def read_state(root=None):
@@ -110,12 +129,14 @@ def read_state(root=None):
             return EMPTY.copy()
         if type(state) is not dict or state.keys() != EMPTY.keys():
             raise ValueError
-        if type(state["version"]) is not int or state["version"] not in (1, 2):
+        if type(state["version"]) is not int or state["version"] not in (1, 2, 3):
             raise ValueError
         latest = state["latest"]
         last_success = state["last_success"]
         _check_record(latest)
-        if state["version"] == 2 and ("action" not in latest or not initialized):
+        if state["version"] >= 2 and ("action" not in latest or not initialized):
+            raise ValueError
+        if (state["version"] == 3) != ("recovery" in latest):
             raise ValueError
         if last_success is not None:
             _check_record(last_success)
@@ -179,7 +200,7 @@ class OperationJournal:
         self._state = state
         self._closed = False
 
-    def begin(self, image_id, release, action=None):
+    def begin(self, image_id, release, action=None, recovery=None):
         if self._closed:
             raise RuntimeError("Operation session is closed")
         if not _matches(r"sha256:[0-9a-f]{64}", image_id):
@@ -200,6 +221,9 @@ class OperationJournal:
         }
         if action is not None:
             record.update(action=action, checks=None)
+        if recovery is not None:
+            record.update(recovery=dict(recovery), evidence=None)
+            _check_record(record)
         try:
             # Save the marker first: interruption here must not look like first use.
             if not _read_marker(self._directory):
@@ -215,7 +239,7 @@ class OperationJournal:
             raise
         return record["id"]
 
-    def finish(self, operation_id, outcome, checks=None):
+    def finish(self, operation_id, outcome, checks=None, evidence=None):
         if self._closed:
             raise RuntimeError("Operation session is closed")
         latest = self._state["latest"]
@@ -231,11 +255,14 @@ class OperationJournal:
             record["checks"] = dict(checks)
         elif checks is not None:
             raise ValueError("Legacy records do not support check results")
+        if "recovery" in record:
+            record["evidence"] = evidence
+            _check_record(record)
         last_success = record if outcome == "succeeded" else self._state["last_success"]
         self._save(record, last_success)
 
     def _save(self, record, last_success):
-        state = {"version": 2 if "action" in record else 1, "latest": record, "last_success": last_success}
+        state = {"version": 3 if "recovery" in record else (2 if "action" in record else 1), "latest": record, "last_success": last_success}
         try:
             _write_json(self._directory / "state.json", state)
         except RecordError:
