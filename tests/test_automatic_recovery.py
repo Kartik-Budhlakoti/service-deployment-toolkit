@@ -1,8 +1,9 @@
 from copy import deepcopy
+import json
 from unittest.mock import patch
 
 from test_recovery import IMAGE, OTHER, PASS, RecoveryFixture, SECRET
-from toolkit.checks import Verification
+from toolkit.checks import Verification, verify
 from toolkit.cli import main
 from toolkit.config import DeploymentRequest, ExitCode
 from toolkit.deploy import deploy
@@ -89,6 +90,51 @@ class AutomaticRecoveryTests(RecoveryFixture):
         self.assertIn("AUTOMATIC RECOVERY: succeeded", self.out.getvalue())
         self.assertNotIn(SECRET, self.out.getvalue())
         self.assertNotIn(SECRET, (self.directory / "state.json").read_text())
+
+    def test_report_is_written_after_recovery_and_links_both_operations(self):
+        self.configure_failed_candidate()
+
+        def replace(*args):
+            self.assertFalse((self.root / "reports").exists())
+            return self.execute(*args)
+
+        def check_candidate(request, *args, **kwargs):
+            if request.image == IMAGE:
+                return PASS
+            tick = [0]
+            def advance(seconds):
+                tick[0] += seconds
+            return verify(request, *args, **kwargs, duration=2, clock=lambda: tick[0],
+                          sleep=advance, http=lambda *args: "connection-refused")
+
+        self.run.side_effect = replace
+        self.verify.side_effect = check_candidate
+        self.assertEqual(self.automatic(), ExitCode.DEPLOYMENT_FAILED)
+        final = read_state(self.root)["latest"]
+        trigger = final["recovery"]["trigger"]
+        folder = self.root / "reports"
+        path, = folder.iterdir()
+        self.assertEqual(path.name, f"operation-{trigger}.json")
+        report = json.loads(path.read_bytes())
+        self.assertEqual(report["operation"]["outcome"], "failed")
+        self.assertEqual(report["operation"]["id"], trigger)
+        first = report["operation"]["verification"]["first_failed"]
+        self.assertEqual(first["inspection"], "exited")
+        self.assertEqual(first["instance"]["image_id"], OTHER)
+        self.assertEqual(first["routes"]["direct_items"], "connection-refused")
+        self.assertEqual(report["automatic_recovery"]["id"], final["id"])
+        self.assertEqual(report["automatic_recovery"]["outcome"], "succeeded")
+        self.assertEqual(main(["report", "--operation", final["id"]]), 0)
+        self.assertEqual(list(folder.iterdir()), [path])
+        self.assertEqual(json.loads(path.read_bytes()), report)
+
+    def test_report_storage_failure_keeps_recovery_and_candidate_exit(self):
+        self.configure_failed_candidate()
+        (self.root / "reports").write_text("occupied")
+        self.assertEqual(self.automatic(), ExitCode.DEPLOYMENT_FAILED)
+        self.assertEqual(self.replacements, [OTHER, IMAGE])
+        self.assertEqual(read_state(self.root)["latest"]["status"], "succeeded")
+        self.assertIn("REPORT UNAVAILABLE", self.out.getvalue())
 
     def test_default_failed_deploy_does_not_recover(self):
         target = self.configure_failed_candidate()

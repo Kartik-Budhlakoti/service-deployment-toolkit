@@ -125,6 +125,25 @@ For pending state, use `status` to get the ID and
 Closure records the current observation and preserves the previous verified
 success. [Recovery rules and exit codes](docs/PHASE-3-RECOVERY.md#combined-batches-ce)
 
+## Read a failure report
+
+After a recorded failure, the toolkit attempts to save a JSON file in `reports/`. If automatic recovery ran,
+the same file shows the failed candidate and the separate recovery outcome.
+Compare the first failed attempt with the final attempt to see which HTTP
+routes answered and whether the API instance changed. A missing sample means
+that observation was unavailable.
+
+To generate the report for any recorded operation, copy its full ID from
+the terminal output or journal and run:
+
+```bash
+python -m toolkit report --operation OPERATION_ID
+```
+
+This works with Docker stopped. Each export reads the saved journal and prints
+the file path. Normal successful deployments create only their journal record.
+[Report fields and timing](docs/ARCHITECTURE.md#operation-reports)
+
 ## Test and review
 
 ```bash

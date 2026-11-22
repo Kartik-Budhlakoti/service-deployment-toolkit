@@ -288,8 +288,7 @@ and repeats the compatibility and resource checks before calling Compose.
 An eligible recovery has its own record linked to the immediately preceding
 failure. Target selection also validates the links between automatic records.
 
-Version 4 snapshots and records support these outcomes. The current reader also
-accepts versions 1–3. The [Phase 3 contract](PHASE-3-RECOVERY.md) records the
+Version 4 snapshots and records support these outcomes. The reader retains support for versions 1–4. Records with verification samples use version 5. The [Phase 3 contract](PHASE-3-RECOVERY.md) records the
 checks, exit codes and verification status.
 
 ## Connectivity diagnostics
@@ -314,3 +313,42 @@ Exit 0 requires four successful observations and a matching final snapshot.
 Exit 1 means a probe failed, was skipped or was unavailable on a confirmed
 stack. Exit 4 means inspection, ownership, the deadline or final confirmation
 prevented an overall conclusion. An interruption can return 130.
+
+## Operation reports
+
+Verification already inspects the API and asks it for liveness, release and
+catalogue data. For each attempt the toolkit keeps five HTTP route outcomes,
+the observed API container and image IDs and its Docker start time when
+available. The inspection field records whether the API stayed running,
+stayed exited, changed, or could not be confirmed. A deadline flag means
+the attempt completed at or after the deadline. A route marked `not-run`
+received no probe. A route marked `deadline` had no time left to start.
+
+An unsuccessful verification saves its first failed attempt and its last
+attempt with the existing failure record in one journal write. When the
+replacement command itself is unconfirmed, the bounded observation can attach
+samples to the pending record. Even a healthy response leaves the outcome
+pending. These version 5 records use the existing 8 KiB snapshot limit.
+Successful operations retain the ordinary compact check summary.
+
+Under the checkout lock, the toolkit attempts a separate report after failure,
+pending intent on unwind, explicit unknown closure, or a linked automatic
+recovery. Normal success and refusals before an operation begins produce no
+incident report. A command killed before export can leave only the journal.
+The report command accepts a full operation ID and exports the historical
+record without contacting Docker. Both IDs of an automatic recovery pair
+select the same candidate report. A busy lock returns 5, invalid history 6,
+and a report export write error 7. An automatic export error prints a warning
+and preserves the operation exit code. Required journal failures still take
+precedence.
+
+JSON reports use schema version 1. The `operation` object identifies the
+requested operation, its image, times, recorded checks and available samples.
+The `automatic_recovery` object is present as a separate outcome when history
+contains a linked attempt. A null value means no such attempt is recorded.
+A null verification field means the journal contains no samples. The
+reconciliation field is an observation made during explicit closure.
+Reports are replaced atomically at `reports/operation-<id>.json` and created
+with owner-only file permissions. They are separate from the recovery evidence
+used to authorize rollback. DNS and TCP observations belong to the standalone
+`diagnose` command. Exporting an old operation makes no new measurements.

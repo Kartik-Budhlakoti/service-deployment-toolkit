@@ -2,20 +2,18 @@
 from dataclasses import dataclass
 from ipaddress import IPv4Address
 from pathlib import Path
-import re
 import sys
 import time
 
 from .config import ExitCode, Settings
 from .docker import Docker, InspectionError
+from .observations import http_label
 from .preflight import NETWORK, PROJECT, LABEL, check_resources, containers, require, single
 from .processes import CommandError, run_command
 
 
 TOTAL_SECONDS = 15
 PROBE_SECONDS = 3
-HTTP_OUTCOMES = {"ok", "oversize-body", "unexpected-body", "connection-refused",
-                 "connection-error", "timeout", "invalid-body", "probe-error"}
 NETWORK_OUTCOMES = {"ok", "resolution-failed", "unexpected-address", "connection-refused",
                     "resolved-address-unconfirmed", "connection-error", "timeout", "unavailable"}
 
@@ -99,8 +97,7 @@ def collect(docker, services, deadline):
                     value = run_command([sys.executable, "-I", str(Path(__file__).with_name("http_probe.py")),
                                          url + "/items", "items", "", str(remaining), "--observation"],
                                         docker.root, None, remaining).strip()
-                    known = value in HTTP_OUTCOMES or re.fullmatch(r"http-[1-5][0-9]{2}", value)
-                    outcome = value if known else "probe-unavailable"
+                    outcome = http_label(value)
             except (CommandError, InspectionError):
                 outcome = "probe-unavailable"
         observations.append(Observation(name, outcome, round((time.monotonic() - start) * 1000)))

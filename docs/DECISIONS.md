@@ -244,5 +244,10 @@ below define the command interface and the evidence required to act.
 | D52 | Check database name resolution and TCP reachability independently from the API container. | Testing the inspected database address separately keeps a name failure distinguishable from a refused connection. The check covers the demo's IPv4 network. |
 | D53 | Bound collection time and print only selected outcomes and elapsed times. | Raw errors can include configuration values. A generic worker failure sometimes leaves the cause unknown. |
 
-Batch A collects terminal observations. The detailed report policy and
-integration with failed operations belong to Batch B.
+### Operation reports
+
+| ID | Choice | Reason and cost |
+|---|---|---|
+| D54 | Retain the first failed verification attempt and the last observed attempt with the journal outcome. | The failed candidate can disappear during recovery. Reusing its verification requests adds no probe sweep. Intermediate attempts and unobserved causes remain unknown. |
+| D55 | Export an incident report after the recovery decision. Put the failed candidate and its linked automatic attempt in one JSON file. | A report write failure is visible to the operator and preserves the deployment exit code. A process killed before export may require manual regeneration. |
+| D56 | Export selected fields from validated local history. Allow an explicit export by full operation ID, including a success. | Export works offline and avoids raw responses, operator release text and signed compatibility data. Older operations contain fewer details. A concurrent operation can delay export. |
