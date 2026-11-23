@@ -115,8 +115,9 @@ All 214 tests passed in both modes after this test-only fix.
   an authentication problem.
 - Credentials are local environment values. They are not intended for Git or
   reports, but remain accessible to sufficiently privileged Docker users.
-- No application access logs are enabled by the supplied API/NGINX configuration;
-  comprehensive diagnosis and bounded evidence collection remain later work.
+- The demo disables API and NGINX access logs. Phase 4 added bounded DNS, TCP
+  and HTTP observations plus failure reports. Per-request access history is
+  unavailable. [Diagnostic evidence and limits](PHASE-4-VERIFICATION.md)
 - Digest-pinned base images and version-pinned Python packages require deliberate
   updates. Python package hashes, vulnerability auditing, and byte-identical
   builds are not established by the Phase 1 checks.

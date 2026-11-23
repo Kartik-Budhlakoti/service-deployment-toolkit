@@ -18,6 +18,9 @@ manual rollback, reconciliation after controlled toolkit exits and one opt-in
 automatic recovery after a candidate failed to start serving HTTP.
 [Phase 3 verification](docs/PHASE-3-RECOVERY.md#combined-live-results)
 
+[Watch a one-minute recovery walkthrough](docs/media/recovery-walkthrough.gif) ·
+[Read the same incident and reproduce it](docs/PHASE-5-VERIFICATION.md#recovery-walkthrough)
+
 ## Run the demo
 
 Use Linux, Python 3.14 and Docker Engine with Compose. The toolkit uses
@@ -145,6 +148,13 @@ the file path. Normal successful deployments create only their journal record.
 [Report fields and timing](docs/ARCHITECTURE.md#operation-reports)
 
 ## Test and review
+
+The [CI workflow](.github/workflows/ci.yml) runs on pull requests to
+`main` and pushes to `main`. The Python job installs the development lock and runs the suite in
+both Python modes. A separate Ubuntu x64 job builds and initializes the demo
+on a fresh runner, checks both HTTP routes and connectivity, and records a
+verified baseline. A manual workflow run also exercises candidate failure
+and recovery. [Release verification](docs/PHASE-5-VERIFICATION.md)
 
 ```bash
 python3.14 -m venv .venv

@@ -256,3 +256,12 @@ below define the command interface and the evidence required to act.
 |---|---|---|
 | D57 | Exercise PostgreSQL and NGINX separately, by stopping and starting the existing owned container under the checkout lock. | The remaining routes reveal which service is still usable. The local demo is briefly degraded, and a hard interruption can require a manual start. |
 | D58 | Reuse the Phase 3 failed-start fixture and check a fresh linked report before re-exporting it. | This exercises the real deployment entry point and catches a missing automatic export. The stage takes longer than reading an old incident and retains a local candidate image. |
+
+## Release verification
+
+| ID | Decision | Reason and cost |
+|---|---|---|
+| D59 | Run the Python suite in normal and optimized modes on Ubuntu 24.04 x64 with Python 3.14.10. Install the development lock in a fresh virtual environment. | Matches the locally tested Python version. Optimized mode catches checks that disappear with assertions. One host configuration keeps the result interpretable and leaves other platforms untested. |
+| D60 | Run the same Python job on pull requests to `main` and pushes to `main`. Give the job read access to repository contents and pin its two actions by commit. | Reviewers can inspect the PR result and the result for the merged commit. Pinned actions need deliberate updates. A real Docker installation and recovery exercise require separate evidence. |
+| D61 | Verify fresh setup on a separate hosted Ubuntu x64 runner for pull requests and pushes to main. Record the tested revision and tool versions. | Exposes missing images, dependencies and undocumented setup steps. The extra job needs registry access and tests a host with Docker already installed. |
+| D62 | Extend the same fresh-demo job with the existing candidate exercise on manual runs. Select the final merged revision for release verification. | Routine runs check startup. The manual run also covers the failed deployment, the linked recovery and final service health. It requires an explicit run before tagging. |
