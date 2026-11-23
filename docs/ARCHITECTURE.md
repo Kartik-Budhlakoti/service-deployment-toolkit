@@ -26,7 +26,7 @@ and medical repositories and their Docker resources remain outside its control.
 | Database | PostgreSQL 18 with a dedicated named volume |
 | Proxy | NGINX forwarding to the Compose service `api` |
 | Initialization | Explicit one-off `init` service using the API image |
-| Demo unit tests | Four API failure tests and five smoke-checker regression tests |
+| Demo unit tests | API behavior during database outages and smoke-checker regressions (`tests/test_api.py`, `tests/test_smoke.py`) |
 | Live checker | `tests/smoke.py`, run on the host |
 
 The Compose project is `sdt-demo`; its database volume is
