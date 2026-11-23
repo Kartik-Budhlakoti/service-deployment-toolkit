@@ -18,6 +18,9 @@ manual rollback, reconciliation after controlled toolkit exits and one opt-in
 automatic recovery after a candidate failed to start serving HTTP.
 [Phase 3 verification](docs/PHASE-3-RECOVERY.md#combined-live-results)
 
+[Watch a one-minute recovery walkthrough](docs/media/recovery-walkthrough.gif) ·
+[Read the same incident and reproduce it](docs/PHASE-5-VERIFICATION.md#recovery-walkthrough)
+
 ## Run the demo
 
 Use Linux, Python 3.14 and Docker Engine with Compose. The toolkit uses
