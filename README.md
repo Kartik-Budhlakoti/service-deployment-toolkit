@@ -146,11 +146,12 @@ the file path. Normal successful deployments create only their journal record.
 
 ## Test and review
 
-The [Python tests workflow](.github/workflows/ci.yml) runs on pull requests to
-`main` and pushes to `main`. It installs the development lock in a fresh
-virtual environment on Ubuntu x64 and exercises the suite in both Python
-modes. Docker behavior in these tests uses fixtures. The live demo exercises
-are linked below.
+The [CI workflow](.github/workflows/ci.yml) runs on pull requests to
+`main` and pushes to `main`. The Python job installs the development lock and runs the suite in
+both Python modes. A separate Ubuntu x64 job builds and initializes the demo
+on a fresh runner, checks both HTTP routes and connectivity, and records a
+verified baseline. A manual workflow run also exercises candidate failure
+and recovery. [Release verification](docs/PHASE-5-VERIFICATION.md)
 
 ```bash
 python3.14 -m venv .venv

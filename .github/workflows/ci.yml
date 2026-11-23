@@ -3,6 +3,7 @@ name: CI
 on:
   pull_request:
     branches: [main]
+  workflow_dispatch:
   push:
     branches: [main]
 
@@ -37,3 +38,89 @@ jobs:
 
       - name: Run the test suite with optimization
         run: PYTHONPATH=demo .venv/bin/python -O -W error -m unittest discover -s tests -v
+
+  demo:
+    name: Fresh demo
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - name: Check out the tested revision
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.14.10'
+
+      - name: Identify the runner and check for existing demo resources
+        run: |
+          git rev-parse HEAD
+          uname -sm
+          python --version
+          docker version --format 'Docker client {{.Client.Version}}, server {{.Server.Version}}'
+          docker compose version
+          python - <<'PYTHON'
+          from pathlib import Path
+          import subprocess
+          from toolkit.docker import Docker
+
+          root = Path.cwd()
+          docker = Docker(root)
+          docker.connect()
+          for name in (".env", ".runtime", "reports"):
+              if (root / name).exists() or (root / name).is_symlink():
+                  raise SystemExit(f"Checkout already contains {name}")
+          project = "label=com.docker.compose.project=sdt-demo"
+          queries = (
+              ("container", "ls", "-aq", "--filter", project),
+              ("container", "ls", "-aq", "--filter", "name=sdt-demo-"),
+              ("volume", "ls", "-q", "--filter", project),
+              ("volume", "ls", "-q", "--filter", "name=sdt-demo_catalogue_data"),
+              ("network", "ls", "-q", "--filter", project),
+              ("network", "ls", "-q", "--filter", "name=sdt-demo_default"),
+              ("image", "ls", "-q", "sdt-demo-api:phase1"),
+          )
+          for query in queries:
+              if docker.text(*query):
+                  raise SystemExit("Existing demo resource: " + " ".join(query))
+          if subprocess.check_output(["ss", "-Hltn", "( sport = :8088 or sport = :8089 )"]).strip():
+              raise SystemExit("A demo port is in use")
+          PYTHON
+
+      - name: Generate local demo credentials
+        run: |
+          python - <<'PYTHON'
+          import os
+          import secrets
+
+          fd = os.open(".env", os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+          with os.fdopen(fd, "w") as file:
+              file.write(f"POSTGRES_PASSWORD={secrets.token_hex(24)}\n")
+              file.write(f"APP_DB_PASSWORD={secrets.token_hex(24)}\n")
+          PYTHON
+
+      - name: Build, initialize and smoke-test the stack
+        run: |
+          git check-ignore .env
+          docker compose config --quiet
+          docker compose build api
+          docker compose up -d --wait --wait-timeout 120 db
+          docker compose run --rm init
+          docker compose up -d --wait --wait-timeout 120 api nginx
+          python tests/smoke.py
+
+      - name: Verify connectivity and record a baseline
+        run: |
+          python -m toolkit preflight --image sdt-demo-api:phase1 --release demo-v1
+          python -m toolkit diagnose
+          python -m toolkit baseline --image sdt-demo-api:phase1 --release demo-v1 --schema catalogue-v1
+          python -m toolkit status
+
+      - name: Exercise recovery on the selected revision
+        if: github.event_name == 'workflow_dispatch'
+        run: |
+          python scripts/phase4-acceptance.py candidate
+          python -m toolkit status
+          python tests/smoke.py
