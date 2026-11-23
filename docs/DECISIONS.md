@@ -256,3 +256,10 @@ below define the command interface and the evidence required to act.
 |---|---|---|
 | D57 | Exercise PostgreSQL and NGINX separately, by stopping and starting the existing owned container under the checkout lock. | The remaining routes reveal which service is still usable. The local demo is briefly degraded, and a hard interruption can require a manual start. |
 | D58 | Reuse the Phase 3 failed-start fixture and check a fresh linked report before re-exporting it. | This exercises the real deployment entry point and catches a missing automatic export. The stage takes longer than reading an old incident and retains a local candidate image. |
+
+## Release verification
+
+| ID | Decision | Reason and cost |
+|---|---|---|
+| D59 | Run the Python suite in normal and optimized modes on Ubuntu 24.04 x64 with Python 3.14.10. Install the development lock in a fresh virtual environment. | Matches the locally tested Python version. Optimized mode catches checks that disappear with assertions. One host configuration keeps the result interpretable and leaves other platforms untested. |
+| D60 | Run the same Python job on pull requests to `main` and pushes to `main`. Give the job read access to repository contents and pin its two actions by commit. | Reviewers can inspect the PR result and the result for the merged commit. Pinned actions need deliberate updates. A real Docker installation and recovery exercise require separate evidence. |

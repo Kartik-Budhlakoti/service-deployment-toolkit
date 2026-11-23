@@ -1,0 +1,39 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  python-tests:
+    name: Python tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Check out the tested revision
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.14.10'
+
+      - name: Install locked development dependencies
+        run: |
+          python --version
+          python -m venv .venv
+          .venv/bin/python -m pip --require-virtualenv install --no-cache-dir -r requirements-dev.lock
+          .venv/bin/python -m pip check
+
+      - name: Run the test suite
+        run: PYTHONPATH=demo .venv/bin/python -W error -m unittest discover -s tests -v
+
+      - name: Run the test suite with optimization
+        run: PYTHONPATH=demo .venv/bin/python -O -W error -m unittest discover -s tests -v
