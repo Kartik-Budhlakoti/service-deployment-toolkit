@@ -205,9 +205,9 @@ Do not interpret this patch as proof of live deployment interruption handling.
   every edit-and-revert race, or support extra configuration fragments/hooks.
 - The generated override is retained. Plain Compose up can restore the base
   image without toolkit recording; resume existing containers with start.
-- Records now include action and check results. Detailed observations after an
-  uncertain command are printed, not saved as a full diagnostic report. Refusals
-  before begin and read-only commands are not persistent deployment operations.
+- Phase 2 records include the action and final checks. A historical record can
+  only report the fields captured by that version. Refusals before pending
+  intent have no operation ID.
 - New version-2 snapshots require the initialization marker. Legacy version-1
   records remain readable. This is local history, not durable backup storage.
 
@@ -230,3 +230,36 @@ Do not interpret this patch as proof of live deployment interruption handling.
   replacement and after Compose returns, before the toolkit records the result.
   It also builds a candidate that exits before serving HTTP. A daemon interruption
   during replacement and a live filesystem write failure require separate evidence.
+
+## Diagnostic limits
+
+The four observations are sequential. A connection to port 5432 shows that a
+listener accepted it. PostgreSQL authentication and queries are exercised
+separately through the catalogue requests. The name check uses the container's
+system resolver, which may also consult a hosts file. This demo checks IPv4.
+
+A removed container or a checkout/override mismatch can prevent inspection.
+An exited API cannot run the two internal probes. If the Docker exec or HTTP
+worker fails to return a recognized result, the command reports
+`probe-unavailable`. A changed or unconfirmed final snapshot makes the overall
+run incomplete. These observations alone cannot identify every root cause.
+
+On the dedicated demo at Batch A commit `80bd059`, all 225 tests passed
+normally and with optimization. Both catalogue routes passed before and after
+diagnostics. Name resolution and TCP to port 5432 both succeeded. This was a
+healthy-stack exercise.
+
+Failure reports preserve only the first failed and last observed attempts.
+An API instance observed before an HTTP request can change during that request.
+Use the inspection field when interpreting route outcomes. Missing history,
+a busy lock, an abrupt exit or local storage failure can prevent an export.
+A previously exported file can be stale after interruption. Regenerate it by
+operation ID once the journal is readable. The report contains operation,
+image and container identifiers and timestamps. Review those identifiers
+before sharing it. Reports give observations rather than a proven root cause.
+
+The Phase 4 outage driver exercises one stopped dependency at a time. An
+external Docker command can still race with the driver. Worker timeouts and
+skipped requests leave gaps in the diagnostic record. The verification guide
+lists the separate smoke checks and the recovery procedure if a stage is
+interrupted. [Phase 4 exercises](PHASE-4-VERIFICATION.md)

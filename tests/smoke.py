@@ -2,15 +2,22 @@ import argparse
 import json
 import sys
 from urllib.error import HTTPError, URLError
-from urllib.request import ProxyHandler, build_opener
+from urllib.request import HTTPRedirectHandler, ProxyHandler, build_opener
 
 EXPECTED = [
     {"id": 1, "name": "Notebook"},
     {"id": 2, "name": "Pencil"},
     {"id": 3, "name": "Folder"},
 ]
-# These checks target local services, not a configured HTTP proxy.
-OPENER = build_opener(ProxyHandler({}))
+
+
+class NoRedirect(HTTPRedirectHandler):
+    def redirect_request(self, request, fp, code, message, headers, newurl):
+        return None
+
+
+# Each URL must answer for itself, even if the other route is healthy.
+OPENER = build_opener(ProxyHandler({}), NoRedirect())
 
 
 class CheckFailure(Exception):
@@ -24,6 +31,8 @@ def read(url):
         response = error
     with response:
         status = response.code
+        if 300 <= status < 400:
+            raise CheckFailure(f"Unexpected HTTP redirect ({status})")
         body = response.read(65537)
     if len(body) > 65536:
         raise ValueError("Response exceeded the checker limit")
@@ -46,6 +55,8 @@ def verify(base, database_down=False):
             raise CheckFailure(f"{path}: expected HTTP {expected_status}, got {status}")
         if body != expected_body:
             raise CheckFailure(f"{path}: response did not match expected content")
+        if path == "/items" and not database_down and any(type(row["id"]) is not int for row in body):
+            raise CheckFailure("/items: expected integer catalogue IDs")
     mode = "database-outage behavior" if database_down else "healthy-stack behavior"
     print(f"PASS: {mode} at {base}")
 

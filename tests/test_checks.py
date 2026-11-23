@@ -8,9 +8,9 @@ from urllib.error import HTTPError
 import unittest
 from unittest.mock import MagicMock, patch
 
-from toolkit.checks import http_check, verify
+from toolkit.checks import http_check, http_observation, verify
 from toolkit.config import DeploymentRequest, Settings
-from toolkit.http_probe import ITEMS, probe
+from toolkit.http_probe import ITEMS, observe_http, probe
 
 
 IMAGE = 'sha256:' + 'a'*64
@@ -99,6 +99,37 @@ class CheckTests(unittest.TestCase):
             return True
         self.assertFalse(self.run_check(http).passed)
 
+    def test_first_failure_and_last_sample_keep_separate_route_results(self):
+        self.api["State"]["StartedAt"] = "2026-11-22T07:09:43.759178212Z"
+        def responses(url, kind, *unused):
+            if kind == "items" and ":8088" in url:
+                return "http-503" if self.now == 0 else "connection-refused"
+            return "ok"
+        result = self.run_check(responses)
+        first, last = result.trace["first_failed"], result.trace["last"]
+        self.assertEqual((first["number"], last["number"]), (1, 4))
+        self.assertEqual(first["routes"]["proxy_items"], "http-503")
+        self.assertEqual(last["routes"]["proxy_items"], "connection-refused")
+        self.assertEqual(last["routes"]["direct_items"], "ok")
+        self.assertEqual(first["instance"], {"api_id": self.api["Id"], "image_id": IMAGE,
+                                            "started_at": self.api["State"]["StartedAt"]})
+        self.assertEqual(last["inspection"], "running")
+
+    def test_skipped_probes_and_unknown_worker_text_are_distinct(self):
+        self.rows["db"]["Id"] = "f" * 64
+        sample = self.run_check().trace["last"]
+        self.assertIsNone(sample["instance"])
+        self.assertEqual(set(sample["routes"].values()), {"not-run"})
+        self.assertEqual(sample["inspection"], "unconfirmed")
+        self.rows["db"]["Id"] = self.deps["db"]
+        def over_budget(*args):
+            self.now += 5
+            return "private driver message"
+        sample = self.run_check(over_budget).trace["last"]
+        self.assertTrue(sample["deadline"])
+        self.assertEqual(sample["routes"]["live"], "probe-unavailable")
+        self.assertEqual(sample["routes"]["direct_items"], "deadline")
+
 
 class HTTPProbeTests(unittest.TestCase):
     def setUp(self):
@@ -132,11 +163,24 @@ class HTTPProbeTests(unittest.TestCase):
     def test_real_worker_success(self):
         self.assertTrue(http_check(self.url, 'live', 'demo-v1', 2))
 
+    def test_real_worker_returns_only_safe_failure_detail(self):
+        self.status, self.payload = 503, b'private fixture text'
+        self.assertEqual(http_observation(self.url, 'items', '', 2), 'http-503')
+
     def test_wrong_status_body_and_malformed_json_fail(self):
         for status, body in ((503,b'{}'), (200,b'{'), (200,b'{"status":"wrong"}')):
             with self.subTest(status=status, body=body):
                 self.status, self.payload = status, body
                 self.assertFalse(probe(self.url, 'live', 'demo-v1', 1))
+
+    def test_diagnostic_http_details(self):
+        for status, body, outcome in ((503, b'private fixture', 'http-503'),
+                                      (200, b'{}', 'unexpected-body'),
+                                      (200, b'{', 'invalid-body'),
+                                      (200, b'x' * 65537, 'oversize-body')):
+            with self.subTest(outcome=outcome):
+                self.status, self.payload = status, body
+                self.assertEqual(observe_http(self.url, 'items', '', 2), outcome)
 
     def test_redirect_is_not_followed(self):
         self.status = 302

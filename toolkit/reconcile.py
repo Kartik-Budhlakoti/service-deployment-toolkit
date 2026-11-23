@@ -8,6 +8,7 @@ from .docker import Docker, InspectionError
 from .locking import LockBusy
 from .override import override_path, read_override, write_override
 from .preflight import LABEL, check_resources, containers, inspect_preflight, require, require_demo_user
+from .reports import incident_reports
 from .recovery import history
 from .state import RecordError, StateUncertain, operation_session, read_state
 
@@ -58,7 +59,7 @@ def reconcile(operation_id, *, close=False, root=None):
             print("PREVIEW: inspect the stack and confirm any Docker changes have stopped before closing as unknown.")
             return ExitCode.OK
 
-        with operation_session(root, allow_pending=True) as journal:
+        with operation_session(root, allow_pending=True) as journal, incident_reports(root, journal):
             pending = pending_operation(journal.latest, operation_id)
             history(root, allow_pending=True)
             initial = configuration_snapshot(root)

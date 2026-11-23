@@ -76,6 +76,15 @@ docker compose start --wait --wait-timeout 120 db api nginx
 
 The documented smoke script expects the initial `demo-v1` release.
 
+## Diagnose connectivity
+
+Run `python -m toolkit diagnose` from the checkout with the existing demo.
+It checks whether the API can resolve the database name and connect to the
+database port, then reads the catalogue directly and through NGINX. Each line
+shows the route, outcome and elapsed milliseconds. The command prints to the
+terminal and leaves deployment state alone.
+[Diagnostic scope and exit codes](docs/ARCHITECTURE.md#connectivity-diagnostics)
+
 ## Work with releases
 
 Verify the running catalogue and record a compatible recovery baseline:
@@ -116,6 +125,25 @@ For pending state, use `status` to get the ID and
 Closure records the current observation and preserves the previous verified
 success. [Recovery rules and exit codes](docs/PHASE-3-RECOVERY.md#combined-batches-ce)
 
+## Read a failure report
+
+After a recorded failure, the toolkit attempts to save a JSON file in `reports/`. If automatic recovery ran,
+the same file shows the failed candidate and the separate recovery outcome.
+Compare the first failed attempt with the final attempt to see which HTTP
+routes answered and whether the API instance changed. A missing sample means
+that observation was unavailable.
+
+To generate the report for any recorded operation, copy its full ID from
+the terminal output or journal and run:
+
+```bash
+python -m toolkit report --operation OPERATION_ID
+```
+
+This works with Docker stopped. Each export reads the saved journal and prints
+the file path. Normal successful deployments create only their journal record.
+[Report fields and timing](docs/ARCHITECTURE.md#operation-reports)
+
 ## Test and review
 
 ```bash
@@ -135,4 +163,5 @@ uses the dedicated demo and intentionally interrupts the API.
 - [Limitations and observed issues](docs/KNOWN-ISSUES.md)
 - [Deployment verification](docs/PHASE-2-VERIFICATION.md)
 - [Recovery verification](docs/PHASE-3-RECOVERY.md)
+- [Reproduce a database outage, proxy outage and failed-release report](docs/PHASE-4-VERIFICATION.md)
 - [MIT license](LICENSE)

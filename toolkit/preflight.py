@@ -94,7 +94,7 @@ def check_compose(config, root):
             and proxy_mounts[0].get("read_only") is True, "Unexpected Compose proxy mount")
 
 
-def check_resources(items, root, *, pending_image=None):
+def check_resources(items, root, *, pending_image=None, diagnostics=False):
     require(len(items) == 3, "Expected exactly api, db and nginx containers; initialize the demo or resolve extra resources")
     selected = {}
     for item in items:
@@ -109,12 +109,12 @@ def check_resources(items, root, *, pending_image=None):
         require(item.get("Name") == f"/{PROJECT}-{service}-1", "Unexpected container name")
         state = item["State"]
         running = state.get("Status") == "running" and state.get("Running") is True
-        stopped_api = (service == "api" and state.get("Status") == "exited"
-                       and state.get("Running") is False)
-        require((running or stopped_api) and not state.get("Paused")
+        stopped = ((service == "api" or diagnostics) and state.get("Status") == "exited"
+                   and state.get("Running") is False)
+        require((running or stopped) and not state.get("Paused")
                 and not state.get("Restarting") and not state.get("Dead"),
                 f"Unsupported container state for {service}")
-        if service == "db":
+        if service == "db" and not diagnostics:
             require(state.get("Health", {}).get("Status") == "healthy", "Database health check is not healthy")
         host = item["HostConfig"]
         require(not host.get("Privileged") and not host.get("Devices"), "Unexpected container host access")

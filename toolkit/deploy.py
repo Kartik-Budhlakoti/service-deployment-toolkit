@@ -8,6 +8,7 @@ from .config import DeploymentRequest, ExitCode, Settings
 from .compatibility import (
     check_plan, comparison_key, compose_arguments, observe, read_inputs, regular_bytes, signed,
 )
+from .reports import incident_reports
 from .recovery import evidence, history, inspect_target, target_record
 from .docker import Docker, InspectionError
 from .locking import LockBusy
@@ -120,6 +121,8 @@ def execute(journal, prepared, root, docker, initial, *, compatibility=None, rec
                   file=sys.stderr)
             observation = verify(request, root, docker, image, before["dependency_ids"],
                                  duration=OBSERVATION_SECONDS)
+            if observation.trace is not None:
+                journal.observe_unconfirmed(operation, observation.trace)
             print("OBSERVATION ONLY: " + describe(observation))
             print("Reconcile the pending operation before any retry or rollback.", file=sys.stderr)
             return ExitCode.STATE_UNCERTAIN, None
@@ -148,7 +151,7 @@ def execute(journal, prepared, root, docker, initial, *, compatibility=None, rec
         key, snapshot = compatibility
         proof = evidence(key, operation, image, request.release, snapshot)
     journal.finish(operation, "succeeded" if result.passed else "failed",
-                   checks=result.checks, evidence=proof)
+                   checks=result.checks, evidence=proof, trace=None if result.passed else result.trace)
     print("CHECKS: " + describe(result))
     if result.passed:
         print(f"SUCCESS: {action} verified and recorded; point-in-time checks only.")
@@ -216,7 +219,7 @@ def deploy(request=None, root=None, *, baseline=False, target=None, allow=False,
     try:
         initial = configuration_snapshot(root)
         docker = Docker(root, (request.settings if request else Settings()).command_timeout)
-        with operation_session(root) as journal:
+        with operation_session(root) as journal, incident_reports(root, journal):
             recovery = None
             compatibility = None
             if baseline or target is not None or auto_recover:

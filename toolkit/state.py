@@ -9,6 +9,7 @@ import tempfile
 from uuid import uuid4
 
 from .config import ConfigurationError, Settings, validate_release
+from .observations import validate_trace
 from .locking import mutation_lock
 from .docker import unique_object
 
@@ -59,6 +60,8 @@ def _check_reconciliation(observation):
 
 
 def _record_version(record):
+    if "verification_trace" in record:
+        return 5
     if ("reconciliation" in record or "auto_target" in record
             or record.get("recovery", {}).get("kind") == "automatic"):
         return 4
@@ -72,9 +75,13 @@ def _check_record(record):
     extended = required | {"action", "checks"}
     shapes = (required, extended, extended | {"recovery", "evidence"},
               extended | {"auto_target", "evidence"})
-    if type(record) is not dict or (set(record) - {"reconciliation"}) not in shapes:
+    if type(record) is not dict or (set(record) - {"reconciliation", "verification_trace"}) not in shapes:
         raise ValueError
     status = record["status"]
+    if "verification_trace" in record:
+        if "action" not in record or status not in ("pending", "failed", CLOSED_UNKNOWN):
+            raise ValueError("Unexpected verification trace")
+        validate_trace(record["verification_trace"])
     if ("reconciliation" in record) != (status == CLOSED_UNKNOWN):
         raise ValueError
     if "reconciliation" in record:
@@ -171,7 +178,7 @@ def read_state(root=None):
             return EMPTY.copy()
         if type(state) is not dict or state.keys() != EMPTY.keys():
             raise ValueError
-        if type(state["version"]) is not int or state["version"] not in (1, 2, 3, 4):
+        if type(state["version"]) is not int or state["version"] not in (1, 2, 3, 4, 5):
             raise ValueError
         latest = state["latest"]
         last_success = state["last_success"]
@@ -314,7 +321,12 @@ class OperationJournal:
             raise StateUncertain("The requested operation is not the pending operation")
         return latest
 
-    def finish(self, operation_id, outcome, checks=None, evidence=None):
+    def observe_unconfirmed(self, operation_id, trace):
+        record = dict(self._pending(operation_id), verification_trace=trace)
+        _check_record(record)
+        self._save(record, self.last_success)
+
+    def finish(self, operation_id, outcome, checks=None, evidence=None, trace=None):
         latest = self._pending(operation_id)
         if outcome not in ("succeeded", "failed"):
             raise ValueError("Finish requires a known success or failure")
@@ -328,7 +340,9 @@ class OperationJournal:
             raise ValueError("Legacy records do not support check results")
         if "evidence" in record:
             record["evidence"] = evidence
-            _check_record(record)
+        if trace is not None:
+            record["verification_trace"] = trace
+        _check_record(record)
         last_success = record if outcome == "succeeded" else self._state["last_success"]
         self._save(record, last_success)
 
@@ -347,6 +361,8 @@ class OperationJournal:
     def _save(self, record, last_success):
         state = {"version": _record_version(record), "latest": record, "last_success": last_success}
         try:
+            if len(json.dumps(state, indent=2)) + 1 > MAX_RECORD_BYTES:
+                raise RecordError("Operation snapshot exceeds the journal size limit")
             _write_json(self._directory / "state.json", state)
         except RecordError:
             self._closed = True

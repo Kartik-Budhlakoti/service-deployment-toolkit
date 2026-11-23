@@ -235,3 +235,24 @@ below define the command interface and the evidence required to act.
 | D48 | Repeat strict compatibility checks after rendering the stored plan, then confirm the current API before submitting the replacement. Save evidence after verified success. | Runtime settings and the selected release must still agree. Additional inspection can refuse a target and adds time before deployment. |
 | D49 | Keep exit code `1` for a failed requested deployment even when automatic recovery succeeds. | A caller can detect the failed release. Operators can read the recovery record for the restored service outcome. |
 | D50 | Use version 4 records for explicit unknown closure and automatic deployment/recovery links. | Old records remain readable in the new toolkit. Older readers can refuse a newer snapshot. Recovery history checks the links between automatic operations. |
+
+## Phase 4 diagnostic collection
+
+| ID | Decision | Reason and cost |
+|---|---|---|
+| D51 | Offer one read-only, on-demand command scoped to the owned local demo. | An operator can inspect a healthy or degraded stack using the same four checks. Missing or foreign resources can prevent inspection. |
+| D52 | Check database name resolution and TCP reachability independently from the API container. | Testing the inspected database address separately keeps a name failure distinguishable from a refused connection. The check covers the demo's IPv4 network. |
+| D53 | Bound collection time and print only selected outcomes and elapsed times. | Raw errors can include configuration values. A generic worker failure sometimes leaves the cause unknown. |
+
+### Operation reports
+
+| ID | Choice | Reason and cost |
+|---|---|---|
+| D54 | Retain the first failed verification attempt and the last observed attempt with the journal outcome. | The failed candidate can disappear during recovery. Reusing its verification requests adds no probe sweep. Intermediate attempts and unobserved causes remain unknown. |
+| D55 | Export an incident report after the recovery decision. Put the failed candidate and its linked automatic attempt in one JSON file. | A report write failure is visible to the operator and preserves the deployment exit code. A process killed before export may require manual regeneration. |
+| D56 | Export selected fields from validated local history. Allow an explicit export by full operation ID, including a success. | Export works offline and avoids raw responses, operator release text and signed compatibility data. Older operations contain fewer details. A concurrent operation can delay export. |
+
+| ID | Acceptance choice | Reason and cost |
+|---|---|---|
+| D57 | Exercise PostgreSQL and NGINX separately, by stopping and starting the existing owned container under the checkout lock. | The remaining routes reveal which service is still usable. The local demo is briefly degraded, and a hard interruption can require a manual start. |
+| D58 | Reuse the Phase 3 failed-start fixture and check a fresh linked report before re-exporting it. | This exercises the real deployment entry point and catches a missing automatic export. The stage takes longer than reading an old incident and retains a local candidate image. |
